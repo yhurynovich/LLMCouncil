@@ -1,0 +1,27 @@
+# ── Backend ──────────────────────────────────────────────────────────────────
+FROM python:3.12-slim
+
+# Install uv (fast Python package manager used by this project)
+RUN pip install --no-cache-dir uv
+
+# Install beautifulsoup4 for DuckDuckGo HTML scraping
+RUN pip install --no-cache-dir beautifulsoup4 httpx
+
+WORKDIR /app
+
+# Copy dependency files first for better layer caching
+COPY pyproject.toml uv.lock ./
+
+# Install project deps + beautifulsoup4 into the uv venv
+RUN uv sync --no-dev --frozen && uv pip install beautifulsoup4
+
+# Copy the rest of the source
+COPY backend/ ./backend/
+COPY main.py ./
+
+# Ensure the data directory exists
+RUN mkdir -p /app/data/conversations
+
+EXPOSE 8001
+
+CMD ["uv", "run", "python", "-m", "backend.main"]
