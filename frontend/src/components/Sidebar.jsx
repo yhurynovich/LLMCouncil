@@ -6,6 +6,7 @@ export default function Sidebar({
   onSelectConversation,
   onNewConversation,
   modelSetSelector,
+  onManageSets,
 }) {
   return (
     <div className="sidebar">
@@ -42,6 +43,9 @@ export default function Sidebar({
       {/* Model set switcher pinned to the bottom of the sidebar */}
       <div className="sidebar-footer">
         {modelSetSelector}
+        <button className="manage-sets-btn" onClick={onManageSets}>
+          Manage Sets
+        </button>
       </div>
     </div>
   );

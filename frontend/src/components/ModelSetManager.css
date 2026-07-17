@@ -1,0 +1,538 @@
+.msm-page {
+  height: 100vh;
+  overflow-y: auto;
+  background: #f5f5f5;
+  padding: 24px 32px;
+}
+
+.msm-loading {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  color: #999;
+  font-size: 16px;
+}
+
+/* ── Header ──────────────────────────────────────────────────────────────── */
+
+.msm-header {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  margin-bottom: 24px;
+}
+
+.msm-header h1 {
+  font-size: 22px;
+  font-weight: 600;
+  color: #1f2937;
+  flex: 1;
+  margin: 0;
+}
+
+.msm-back-btn {
+  padding: 8px 14px;
+  border: 1px solid #d1d5db;
+  border-radius: 6px;
+  background: white;
+  cursor: pointer;
+  font-size: 14px;
+  color: #374151;
+  transition: background 0.15s;
+}
+
+.msm-back-btn:hover {
+  background: #f3f4f6;
+}
+
+.msm-create-btn {
+  padding: 8px 16px;
+  border: none;
+  border-radius: 6px;
+  background: #4a90e2;
+  color: white;
+  cursor: pointer;
+  font-size: 14px;
+  font-weight: 500;
+  transition: background 0.15s;
+}
+
+.msm-create-btn:hover {
+  background: #357abd;
+}
+
+.msm-error {
+  background: #fef2f2;
+  border: 1px solid #fecaca;
+  color: #dc2626;
+  padding: 10px 14px;
+  border-radius: 6px;
+  margin-bottom: 16px;
+  font-size: 14px;
+}
+
+/* ── Grid of set cards ───────────────────────────────────────────────────── */
+
+.msm-sets-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(340px, 1fr));
+  gap: 16px;
+}
+
+.msm-set-card {
+  background: white;
+  border: 1px solid #e5e7eb;
+  border-radius: 10px;
+  padding: 20px;
+  position: relative;
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+
+.msm-set-card:hover {
+  border-color: #d1d5db;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.04);
+}
+
+.msm-set-card.active {
+  border-color: #4a90e2;
+  box-shadow: 0 0 0 2px rgba(74, 144, 226, 0.15);
+}
+
+.msm-card-header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 10px;
+}
+
+.msm-card-icon {
+  width: 40px;
+  height: 40px;
+  border-radius: 8px;
+  background: #f3f4f6;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 13px;
+  font-weight: 700;
+  color: #6b7280;
+  flex-shrink: 0;
+}
+
+.msm-card-title-area {
+  flex: 1;
+  min-width: 0;
+}
+
+.msm-card-title-area h3 {
+  font-size: 16px;
+  font-weight: 600;
+  color: #1f2937;
+  margin: 0;
+}
+
+.msm-card-id {
+  font-size: 12px;
+  color: #9ca3af;
+  font-family: monospace;
+}
+
+.msm-active-badge {
+  background: #dbeafe;
+  color: #1d4ed8;
+  font-size: 10px;
+  font-weight: 700;
+  padding: 3px 8px;
+  border-radius: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
+.msm-builtin-badge {
+  background: #f3f4f6;
+  color: #6b7280;
+  font-size: 10px;
+  font-weight: 600;
+  padding: 3px 8px;
+  border-radius: 10px;
+}
+
+.msm-card-desc {
+  font-size: 13px;
+  color: #6b7280;
+  margin: 0 0 14px 0;
+  line-height: 1.5;
+}
+
+.msm-card-models {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-bottom: 16px;
+}
+
+.msm-card-section-label {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: #9ca3af;
+  display: block;
+  margin-bottom: 4px;
+}
+
+.msm-card-model-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.msm-card-model-tag {
+  background: #f3f4f6;
+  border: 1px solid #e5e7eb;
+  border-radius: 4px;
+  padding: 2px 8px;
+  font-size: 12px;
+  font-family: monospace;
+  color: #374151;
+}
+
+.msm-card-chairman {
+  font-size: 13px;
+  font-family: monospace;
+  color: #92400e;
+  background: #fef3c7;
+  border-radius: 4px;
+  padding: 2px 8px;
+  display: inline-block;
+}
+
+.msm-card-actions {
+  display: flex;
+  gap: 8px;
+  padding-top: 12px;
+  border-top: 1px solid #f3f4f6;
+}
+
+.msm-edit-btn {
+  padding: 6px 14px;
+  border: 1px solid #d1d5db;
+  border-radius: 6px;
+  background: white;
+  cursor: pointer;
+  font-size: 13px;
+  color: #374151;
+  transition: background 0.15s;
+}
+
+.msm-edit-btn:hover {
+  background: #f9fafb;
+}
+
+.msm-delete-btn {
+  padding: 6px 14px;
+  border: 1px solid #fecaca;
+  border-radius: 6px;
+  background: white;
+  cursor: pointer;
+  font-size: 13px;
+  color: #dc2626;
+  transition: background 0.15s;
+}
+
+.msm-delete-btn:hover {
+  background: #fef2f2;
+}
+
+/* ── Delete confirm dialog ───────────────────────────────────────────────── */
+
+.msm-delete-dialog {
+  position: absolute;
+  inset: 0;
+  background: rgba(255, 255, 255, 0.95);
+  border-radius: 10px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  z-index: 10;
+}
+
+.msm-delete-dialog p {
+  font-size: 15px;
+  font-weight: 500;
+  color: #1f2937;
+}
+
+.msm-delete-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.msm-delete-confirm {
+  padding: 6px 14px;
+  border: none;
+  border-radius: 6px;
+  background: #dc2626;
+  color: white;
+  cursor: pointer;
+  font-size: 13px;
+}
+
+.msm-delete-cancel {
+  padding: 6px 14px;
+  border: 1px solid #d1d5db;
+  border-radius: 6px;
+  background: white;
+  cursor: pointer;
+  font-size: 13px;
+  color: #374151;
+}
+
+/* ── Edit / Create Form ──────────────────────────────────────────────────── */
+
+.msm-form {
+  background: white;
+  border: 1px solid #e5e7eb;
+  border-radius: 10px;
+  padding: 24px;
+  max-width: 800px;
+}
+
+.msm-form-row {
+  display: flex;
+  gap: 16px;
+}
+
+.msm-form-row .msm-field {
+  flex: 1;
+}
+
+.msm-form-row .msm-field-small {
+  flex: 0 0 80px;
+}
+
+.msm-field {
+  margin-bottom: 16px;
+}
+
+.msm-field label {
+  display: block;
+  font-size: 13px;
+  font-weight: 600;
+  color: #374151;
+  margin-bottom: 6px;
+}
+
+.msm-input {
+  width: 100%;
+  padding: 8px 12px;
+  border: 1px solid #d1d5db;
+  border-radius: 6px;
+  font-size: 14px;
+  color: #1f2937;
+  background: white;
+  transition: border-color 0.15s;
+}
+
+.msm-input:focus {
+  outline: none;
+  border-color: #4a90e2;
+  box-shadow: 0 0 0 2px rgba(74, 144, 226, 0.15);
+}
+
+.msm-input:disabled {
+  background: #f9fafb;
+  color: #9ca3af;
+  cursor: not-allowed;
+}
+
+.msm-select {
+  width: 100%;
+  padding: 8px 12px;
+  border: 1px solid #d1d5db;
+  border-radius: 6px;
+  font-size: 14px;
+  color: #1f2937;
+  background: white;
+}
+
+.msm-select:focus {
+  outline: none;
+  border-color: #4a90e2;
+}
+
+/* ── Model Picker ────────────────────────────────────────────────────────── */
+
+.msm-model-picker {
+  margin-bottom: 16px;
+}
+
+.msm-picker-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 10px;
+}
+
+.msm-picker-header h3 {
+  font-size: 14px;
+  font-weight: 600;
+  color: #1f2937;
+  margin: 0;
+}
+
+.msm-search {
+  padding: 6px 12px;
+  border: 1px solid #d1d5db;
+  border-radius: 6px;
+  font-size: 13px;
+  width: 220px;
+  color: #1f2937;
+}
+
+.msm-search:focus {
+  outline: none;
+  border-color: #4a90e2;
+}
+
+.msm-model-list {
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+  max-height: 400px;
+  overflow-y: auto;
+}
+
+.msm-no-models {
+  padding: 24px;
+  text-align: center;
+  color: #999;
+  font-size: 14px;
+}
+
+.msm-model-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 12px;
+  border-bottom: 1px solid #f3f4f6;
+  cursor: pointer;
+  transition: background 0.1s;
+}
+
+.msm-model-item:last-child {
+  border-bottom: none;
+}
+
+.msm-model-item:hover {
+  background: #f9fafb;
+}
+
+.msm-model-item.selected {
+  background: #eff6ff;
+}
+
+.msm-model-check {
+  width: 22px;
+  height: 22px;
+  border: 2px solid #d1d5db;
+  border-radius: 4px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 13px;
+  color: #4a90e2;
+  flex-shrink: 0;
+  transition: all 0.1s;
+}
+
+.msm-model-item.selected .msm-model-check {
+  background: #4a90e2;
+  border-color: #4a90e2;
+  color: white;
+}
+
+.msm-model-info {
+  flex: 1;
+  min-width: 0;
+}
+
+.msm-model-name {
+  font-size: 13px;
+  font-weight: 500;
+  color: #1f2937;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.msm-model-id {
+  font-size: 11px;
+  color: #9ca3af;
+  font-family: monospace;
+}
+
+.msm-model-meta {
+  display: flex;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.msm-model-price {
+  font-size: 11px;
+  color: #059669;
+  white-space: nowrap;
+}
+
+.msm-model-ctx {
+  font-size: 11px;
+  color: #9ca3af;
+  white-space: nowrap;
+}
+
+/* ── Form Actions ────────────────────────────────────────────────────────── */
+
+.msm-form-actions {
+  display: flex;
+  gap: 10px;
+  padding-top: 16px;
+  border-top: 1px solid #f3f4f6;
+}
+
+.msm-save-btn {
+  padding: 8px 20px;
+  border: none;
+  border-radius: 6px;
+  background: #4a90e2;
+  color: white;
+  cursor: pointer;
+  font-size: 14px;
+  font-weight: 500;
+  transition: background 0.15s;
+}
+
+.msm-save-btn:hover {
+  background: #357abd;
+}
+
+.msm-save-btn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.msm-cancel-btn {
+  padding: 8px 16px;
+  border: 1px solid #d1d5db;
+  border-radius: 6px;
+  background: white;
+  cursor: pointer;
+  font-size: 14px;
+  color: #374151;
+}
+
+.msm-cancel-btn:hover {
+  background: #f9fafb;
+}

@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react';
 import Sidebar from './components/Sidebar';
 import ChatInterface from './components/ChatInterface';
 import ModelSetSelector from './components/ModelSetSelector';
+import ModelSetManager from './components/ModelSetManager';
 import { api } from './api';
 import './App.css';
 
@@ -11,6 +12,7 @@ function App() {
   const [currentConversation, setCurrentConversation] = useState(null);
   const [isLoading, setIsLoading] = useState(false);
   const [activeModelSet, setActiveModelSet] = useState(null);
+  const [view, setView] = useState('chat'); // 'chat' or 'manage-sets'
 
   useEffect(() => {
     loadConversations();
@@ -206,17 +208,25 @@ function App() {
       <Sidebar
         conversations={conversations}
         currentConversationId={currentConversationId}
-        onSelectConversation={handleSelectConversation}
+        onSelectConversation={(id) => {
+          setCurrentConversationId(id);
+          setView('chat');
+        }}
         onNewConversation={handleNewConversation}
         modelSetSelector={
           <ModelSetSelector onSetChange={setActiveModelSet} />
         }
+        onManageSets={() => setView('manage-sets')}
       />
-      <ChatInterface
-        conversation={currentConversation}
-        onSendMessage={handleSendMessage}
-        isLoading={isLoading}
-      />
+      {view === 'chat' ? (
+        <ChatInterface
+          conversation={currentConversation}
+          onSendMessage={handleSendMessage}
+          isLoading={isLoading}
+        />
+      ) : (
+        <ModelSetManager onBack={() => setView('chat')} />
+      )}
     </div>
   );
 }

@@ -1,7 +1,7 @@
 /**
  * API client for the LLM Council backend.
  */
-const API_BASE = `${window.location.protocol}//${window.location.hostname}:5174`;
+const API_BASE = `${window.location.protocol}//${window.location.hostname}:8001`;
 
 export const api = {
 
@@ -44,6 +44,49 @@ export const api = {
       body: JSON.stringify({ set_id: setId }),
     });
     if (!response.ok) throw new Error('Failed to set model set');
+    return response.json();
+  },
+
+  async createModelSet(data) {
+    const response = await fetch(`${API_BASE}/api/model-sets`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data),
+    });
+    if (!response.ok) {
+      const err = await response.json().catch(() => ({}));
+      throw new Error(err.detail || 'Failed to create model set');
+    }
+    return response.json();
+  },
+
+  async updateModelSet(setId, data) {
+    const response = await fetch(`${API_BASE}/api/model-sets/${encodeURIComponent(setId)}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data),
+    });
+    if (!response.ok) {
+      const err = await response.json().catch(() => ({}));
+      throw new Error(err.detail || 'Failed to update model set');
+    }
+    return response.json();
+  },
+
+  async deleteModelSet(setId) {
+    const response = await fetch(`${API_BASE}/api/model-sets/${encodeURIComponent(setId)}`, {
+      method: 'DELETE',
+    });
+    if (!response.ok) {
+      const err = await response.json().catch(() => ({}));
+      throw new Error(err.detail || 'Failed to delete model set');
+    }
+    return response.json();
+  },
+
+  async listAvailableModels() {
+    const response = await fetch(`${API_BASE}/api/available-models`);
+    if (!response.ok) throw new Error('Failed to fetch available models');
     return response.json();
   },
 

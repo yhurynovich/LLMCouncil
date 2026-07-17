@@ -9,6 +9,7 @@ import uuid
 import json
 import asyncio
 import traceback
+import httpx
 
 from . import storage
 from . import config as cfg
@@ -43,6 +44,21 @@ class SendMessageRequest(BaseModel):
 
 class SetModelSetRequest(BaseModel):
     set_id: str
+
+class CreateModelSetRequest(BaseModel):
+    set_id: str
+    label: str
+    icon: str = ""
+    description: str = ""
+    council: List[str] = []
+    chairman: str = ""
+
+class UpdateModelSetRequest(BaseModel):
+    label: Optional[str] = None
+    icon: Optional[str] = None
+    description: Optional[str] = None
+    council: Optional[List[str]] = None
+    chairman: Optional[str] = None
 
 class ConversationMetadata(BaseModel):
     id: str
@@ -94,6 +110,89 @@ async def set_active_model_set(request: SetModelSetRequest):
         "council": active["council"],
         "chairman": active["chairman"],
     }
+
+
+@app.post("/api/model-sets")
+async def create_model_set(request: CreateModelSetRequest):
+    """Create a new model set."""
+    set_id = request.set_id.strip().lower().replace(" ", "-")
+    if not set_id:
+        raise HTTPException(status_code=400, detail="set_id is required")
+    if set_id in cfg.MODEL_SETS:
+        raise HTTPException(status_code=409, detail=f"Model set '{set_id}' already exists")
+
+    cfg.MODEL_SETS[set_id] = {
+        "label": request.label,
+        "icon": request.icon or request.label[:4].upper(),
+        "description": request.description,
+        "council": request.council,
+        "chairman": request.chairman,
+    }
+    cfg._save_model_sets(cfg.MODEL_SETS)
+    return {"ok": True, "set_id": set_id}
+
+
+@app.put("/api/model-sets/{set_id}")
+async def update_model_set(set_id: str, request: UpdateModelSetRequest):
+    """Update an existing model set."""
+    if set_id not in cfg.MODEL_SETS:
+        raise HTTPException(status_code=404, detail=f"Model set '{set_id}' not found")
+
+    ms = cfg.MODEL_SETS[set_id]
+    if request.label is not None:
+        ms["label"] = request.label
+    if request.icon is not None:
+        ms["icon"] = request.icon
+    if request.description is not None:
+        ms["description"] = request.description
+    if request.council is not None:
+        ms["council"] = request.council
+    if request.chairman is not None:
+        ms["chairman"] = request.chairman
+
+    cfg._save_model_sets(cfg.MODEL_SETS)
+    return {"ok": True, "set_id": set_id}
+
+
+@app.delete("/api/model-sets/{set_id}")
+async def delete_model_set(set_id: str):
+    """Delete a model set. Built-in sets cannot be deleted."""
+    if set_id not in cfg.MODEL_SETS:
+        raise HTTPException(status_code=404, detail=f"Model set '{set_id}' not found")
+    if set_id in cfg.BUILTIN_SET_IDS:
+        raise HTTPException(status_code=400, detail=f"Cannot delete built-in set '{set_id}'")
+
+    del cfg.MODEL_SETS[set_id]
+    if cfg.ACTIVE_MODEL_SET == set_id:
+        cfg.ACTIVE_MODEL_SET = "free"
+    cfg._save_model_sets(cfg.MODEL_SETS)
+    return {"ok": True}
+
+
+@app.get("/api/available-models")
+async def list_available_models():
+    """Fetch available models from OpenRouter."""
+    if not cfg.OPENROUTER_API_KEY:
+        raise HTTPException(status_code=500, detail="OPENROUTER_API_KEY not configured")
+
+    async with httpx.AsyncClient(timeout=30) as client:
+        resp = await client.get(
+            "https://openrouter.ai/api/v1/models",
+            headers={"Authorization": f"Bearer {cfg.OPENROUTER_API_KEY}"},
+        )
+        if resp.status_code != 200:
+            raise HTTPException(status_code=502, detail=f"OpenRouter returned {resp.status_code}")
+
+        data = resp.json()
+        models = []
+        for m in data.get("data", []):
+            models.append({
+                "id": m["id"],
+                "name": m.get("name", m["id"]),
+                "pricing": m.get("pricing", {}),
+                "context_length": m.get("context_length"),
+            })
+        return {"models": models}
 
 
 # ── Conversations ─────────────────────────────────────────────────────────────
