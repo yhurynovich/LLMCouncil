@@ -377,7 +377,7 @@ async def send_message_stream(conversation_id: str, request: SendMessageRequest)
                 )
 
             # Stage 1
-            print(f"[STREAM] Stage 1 starting — set={set_id}, models={council_models}", flush=True)
+            print(f"[STREAM] Stage 1 starting — set={set_id}, models={council_models}, quick={request.quick}", flush=True)
             yield f"data: {json.dumps({'type': 'stage1_start'})}\n\n"
             stage1_results = await stage1_collect_responses(request.content, council_models)
             print(f"[STREAM] Stage 1 complete: {len(stage1_results)} responses", flush=True)
