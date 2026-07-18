@@ -52,6 +52,7 @@ export default function ModelSetSelector({ onSetChange }) {
           >
             <span className="pill-icon">{set.icon}</span>
             <span className="pill-label">{set.label}</span>
+            {active === id && <span className="pill-active-dot" />}
           </button>
         ))}
       </div>
@@ -69,6 +70,9 @@ export default function ModelSetSelector({ onSetChange }) {
           <div className="tooltip-chairman">
             👑 {sets[tooltip].chairman.split('/')[1]?.replace(/:free$/, '') ?? sets[tooltip].chairman}
           </div>
+          {active === tooltip && (
+            <div className="tooltip-default">✓ Default (persists across sessions)</div>
+          )}
         </div>
       )}
     </div>

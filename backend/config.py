@@ -113,7 +113,30 @@ def _ensure_provider_prefix(model_sets: dict) -> dict:
 
 MODEL_SETS = _ensure_provider_prefix(_load_model_sets())
 
-ACTIVE_MODEL_SET = "free"
+ACTIVE_MODEL_SET_FILE = "data/active_model_set.json"
+
+
+def _load_active_model_set() -> str:
+    if os.path.exists(ACTIVE_MODEL_SET_FILE):
+        try:
+            with open(ACTIVE_MODEL_SET_FILE, "r") as f:
+                data = json.load(f)
+                if data.get("set_id") in MODEL_SETS:
+                    return data["set_id"]
+        except (json.JSONDecodeError, OSError):
+            pass
+    return "free"
+
+
+def _save_active_model_set(set_id: str):
+    parent = os.path.dirname(ACTIVE_MODEL_SET_FILE)
+    if parent:
+        os.makedirs(parent, exist_ok=True)
+    with open(ACTIVE_MODEL_SET_FILE, "w") as f:
+        json.dump({"set_id": set_id}, f)
+
+
+ACTIVE_MODEL_SET = _load_active_model_set()
 
 BUILTIN_SET_IDS = {"free", "smart", "reasonable", "privacy"}
 

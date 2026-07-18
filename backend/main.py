@@ -120,6 +120,7 @@ async def set_active_model_set(request: SetModelSetRequest):
     if request.set_id not in cfg.MODEL_SETS:
         raise HTTPException(status_code=400, detail=f"Unknown model set: {request.set_id}")
     cfg.ACTIVE_MODEL_SET = request.set_id
+    cfg._save_active_model_set(request.set_id)
     active = cfg.MODEL_SETS[request.set_id]
     return {
         "active": request.set_id,

@@ -105,3 +105,20 @@
   color: #fbbf24;
   font-size: 11px;
 }
+
+.pill-active-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #22c55e;
+  flex-shrink: 0;
+}
+
+.tooltip-default {
+  border-top: 1px solid #374151;
+  padding-top: 6px;
+  margin-top: 6px;
+  color: #22c55e;
+  font-size: 11px;
+  font-weight: 500;
+}
