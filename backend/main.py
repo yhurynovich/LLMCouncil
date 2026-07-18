@@ -13,6 +13,7 @@ import httpx
 
 from . import storage
 from . import config as cfg
+from . import providers as prov
 from .council import (
     run_full_council,
     generate_conversation_title,
@@ -71,6 +72,21 @@ class Conversation(BaseModel):
     created_at: str
     title: str
     messages: List[Dict[str, Any]]
+
+class CreateProviderRequest(BaseModel):
+    name: str
+    base_url: str
+    api_key: str = ""
+    api_key_env: str = ""
+    stream: bool = False
+    description: str = ""
+
+class UpdateProviderRequest(BaseModel):
+    base_url: Optional[str] = None
+    api_key: Optional[str] = None
+    api_key_env: Optional[str] = None
+    stream: Optional[bool] = None
+    description: Optional[str] = None
 
 
 # ── Health ────────────────────────────────────────────────────────────────────
@@ -169,30 +185,133 @@ async def delete_model_set(set_id: str):
     return {"ok": True}
 
 
+# ── Providers ──────────────────────────────────────────────────────────────
+
+@app.get("/api/providers")
+async def list_providers():
+    """Return all configured providers."""
+    return {"providers": prov.list_providers()}
+
+
+@app.post("/api/providers")
+async def create_provider(request: CreateProviderRequest):
+    """Add a new provider."""
+    name = request.name.strip().lower().replace(" ", "-")
+    if not name:
+        raise HTTPException(status_code=400, detail="Provider name is required")
+    if name in prov.PROVIDERS:
+        raise HTTPException(status_code=409, detail=f"Provider '{name}' already exists")
+
+    prov.PROVIDERS[name] = {
+        "base_url": request.base_url,
+        "api_key": request.api_key,
+        "api_key_env": request.api_key_env,
+        "stream": request.stream,
+        "description": request.description,
+    }
+    prov._save_providers(prov.PROVIDERS)
+    return {"ok": True, "name": name}
+
+
+@app.put("/api/providers/{name}")
+async def update_provider(name: str, request: UpdateProviderRequest):
+    """Update an existing provider."""
+    if name not in prov.PROVIDERS:
+        raise HTTPException(status_code=404, detail=f"Provider '{name}' not found")
+
+    p = prov.PROVIDERS[name]
+    if request.base_url is not None:
+        p["base_url"] = request.base_url
+    if request.api_key is not None:
+        p["api_key"] = request.api_key
+    if request.api_key_env is not None:
+        p["api_key_env"] = request.api_key_env
+    if request.stream is not None:
+        p["stream"] = request.stream
+    if request.description is not None:
+        p["description"] = request.description
+
+    prov._save_providers(prov.PROVIDERS)
+    return {"ok": True, "name": name}
+
+
+@app.delete("/api/providers/{name}")
+async def delete_provider(name: str):
+    """Delete a provider. Cannot delete 'openrouter'."""
+    if name not in prov.PROVIDERS:
+        raise HTTPException(status_code=404, detail=f"Provider '{name}' not found")
+    if name == "openrouter":
+        raise HTTPException(status_code=400, detail="Cannot delete built-in 'openrouter' provider")
+
+    del prov.PROVIDERS[name]
+    prov._save_providers(prov.PROVIDERS)
+    return {"ok": True}
+
+
 @app.get("/api/available-models")
 async def list_available_models():
-    """Fetch available models from OpenRouter."""
-    if not cfg.OPENROUTER_API_KEY:
-        raise HTTPException(status_code=500, detail="OPENROUTER_API_KEY not configured")
+    """Fetch available models from all providers."""
+    all_models = []
 
-    async with httpx.AsyncClient(timeout=30) as client:
-        resp = await client.get(
-            "https://openrouter.ai/api/v1/models",
-            headers={"Authorization": f"Bearer {cfg.OPENROUTER_API_KEY}"},
-        )
-        if resp.status_code != 200:
-            raise HTTPException(status_code=502, detail=f"OpenRouter returned {resp.status_code}")
+    for provider_name, provider in prov.PROVIDERS.items():
+        api_key = prov.get_provider_api_key(provider)
+        if not api_key and provider_name != "openrouter":
+            continue
 
-        data = resp.json()
-        models = []
-        for m in data.get("data", []):
-            models.append({
-                "id": m["id"],
-                "name": m.get("name", m["id"]),
-                "pricing": m.get("pricing", {}),
-                "context_length": m.get("context_length"),
-            })
-        return {"models": models}
+        try:
+            # Derive models endpoint from base_url
+            base = provider["base_url"]
+            if base.endswith("/chat/completions"):
+                models_url = base.replace("/chat/completions", "/models")
+            elif base.endswith("/v1/chat/completions"):
+                models_url = base.replace("/v1/chat/completions", "/v1/models")
+            else:
+                models_url = base.rstrip("/") + "/models"
+
+            headers = {}
+            if api_key:
+                headers["Authorization"] = f"Bearer {api_key}"
+
+            async with httpx.AsyncClient(timeout=30) as client:
+                resp = await client.get(models_url, headers=headers)
+                if resp.status_code == 200:
+                    data = resp.json()
+                    # OpenAI-compatible format: { "data": [{ "id": "...", "name": "..." }] }
+                    for m in data.get("data", []):
+                        model_id = m.get("id", "")
+                        if model_id:
+                            all_models.append({
+                                "id": f"{provider_name}/{model_id}",
+                                "name": m.get("name", model_id),
+                                "provider": provider_name,
+                                "pricing": m.get("pricing", {}),
+                                "context_length": m.get("context_length"),
+                            })
+                else:
+                    # Fallback: use configured model if models endpoint fails
+                    model_id = provider.get("model", "")
+                    if model_id:
+                        all_models.append({
+                            "id": f"{provider_name}/{model_id}",
+                            "name": model_id,
+                            "provider": provider_name,
+                            "pricing": {},
+                            "context_length": None,
+                        })
+        except Exception as e:
+            print(f"Error fetching models from {provider_name}: {e}")
+            # Fallback: use configured model
+            model_id = provider.get("model", "")
+            if model_id:
+                all_models.append({
+                    "id": f"{provider_name}/{model_id}",
+                    "name": model_id,
+                    "provider": provider_name,
+                    "pricing": {},
+                    "context_length": None,
+                })
+
+    return {"models": all_models}
 
 
 # ── Conversations ─────────────────────────────────────────────────────────────

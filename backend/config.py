@@ -16,48 +16,48 @@ DEFAULT_MODEL_SETS = {
         "icon": "FREE",
         "description": "100% free models on OpenRouter. May be rate-limited.",
         "council": [
-            "openai/gpt-oss-120b:free",
-            "meta-llama/llama-3.3-70b-instruct:free",
-            "google/gemma-4-31b-it:free",
-            "deepseek/deepseek-v4-flash:free",
+            "openrouter/openai/gpt-oss-120b:free",
+            "openrouter/meta-llama/llama-3.3-70b-instruct:free",
+            "openrouter/google/gemma-4-31b-it:free",
+            "openrouter/deepseek/deepseek-v4-flash:free",
         ],
-        "chairman": "openai/gpt-oss-120b:free",
+        "chairman": "openrouter/openai/gpt-oss-120b:free",
     },
     "smart": {
         "label": "Smartest",
         "icon": "SMART",
         "description": "Best available models. Requires OpenRouter credits.",
         "council": [
-            "openai/gpt-4o",
-            "anthropic/claude-sonnet-4-5",
-            "google/gemini-2.5-flash",
-            "x-ai/grok-3-mini",
+            "openrouter/openai/gpt-4o",
+            "openrouter/anthropic/claude-sonnet-4-5",
+            "openrouter/google/gemini-2.5-flash",
+            "openrouter/x-ai/grok-3-mini",
         ],
-        "chairman": "anthropic/claude-sonnet-4-5",
+        "chairman": "openrouter/anthropic/claude-sonnet-4-5",
     },
     "reasonable": {
         "label": "Reasonable",
         "icon": "OK",
         "description": "Good balance of quality and cost.",
         "council": [
-            "openai/gpt-4o-mini",
-            "anthropic/claude-haiku-4-5",
-            "google/gemini-2.5-flash",
-            "meta-llama/llama-3.3-70b-instruct",
+            "openrouter/openai/gpt-4o-mini",
+            "openrouter/anthropic/claude-haiku-4-5",
+            "openrouter/google/gemini-2.5-flash",
+            "openrouter/meta-llama/llama-3.3-70b-instruct",
         ],
-        "chairman": "openai/gpt-4o-mini",
+        "chairman": "openrouter/openai/gpt-4o-mini",
     },
     "privacy": {
         "label": "Privacy First",
         "icon": "PRIV",
         "description": "EU-based or privacy-focused providers. No US Big Tech.",
         "council": [
-            "mistralai/mistral-large",
-            "mistralai/mistral-small",
-            "qwen/qwen-2.5-72b-instruct",
-            "deepseek/deepseek-chat",
+            "openrouter/mistralai/mistral-large",
+            "openrouter/mistralai/mistral-small",
+            "openrouter/qwen/qwen-2.5-72b-instruct",
+            "openrouter/deepseek/deepseek-chat",
         ],
-        "chairman": "mistralai/mistral-large",
+        "chairman": "openrouter/mistralai/mistral-large",
     },
 }
 
@@ -84,7 +84,34 @@ def _save_model_sets(sets: dict):
         json.dump(sets, f, indent=2)
 
 
-MODEL_SETS = _load_model_sets()
+from .providers import PROVIDERS
+
+
+def _ensure_provider_prefix(model_sets: dict) -> dict:
+    """Auto-prefix model IDs with 'openrouter/' if no provider prefix present."""
+    needs_save = False
+    for set_id, ms in model_sets.items():
+        for field in ("council", "chairman"):
+            val = ms[field]
+            if isinstance(val, list):
+                new_val = []
+                for m in val:
+                    if "/" not in m or m.split("/")[0] not in PROVIDERS:
+                        new_val.append(f"openrouter/{m}")
+                        needs_save = True
+                    else:
+                        new_val.append(m)
+                ms[field] = new_val
+            elif isinstance(val, str) and val:
+                if "/" not in val or val.split("/")[0] not in PROVIDERS:
+                    ms[field] = f"openrouter/{val}"
+                    needs_save = True
+    if needs_save:
+        _save_model_sets(model_sets)
+    return model_sets
+
+
+MODEL_SETS = _ensure_provider_prefix(_load_model_sets())
 
 ACTIVE_MODEL_SET = "free"
 

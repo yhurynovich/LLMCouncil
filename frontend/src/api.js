@@ -90,7 +90,52 @@ export const api = {
     return response.json();
   },
 
-  //  Streaming 
+  //  Providers
+
+  async listProviders() {
+    const response = await fetch(`${API_BASE}/api/providers`);
+    if (!response.ok) throw new Error('Failed to list providers');
+    return response.json();
+  },
+
+  async createProvider(data) {
+    const response = await fetch(`${API_BASE}/api/providers`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data),
+    });
+    if (!response.ok) {
+      const err = await response.json().catch(() => ({}));
+      throw new Error(err.detail || 'Failed to create provider');
+    }
+    return response.json();
+  },
+
+  async updateProvider(name, data) {
+    const response = await fetch(`${API_BASE}/api/providers/${encodeURIComponent(name)}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data),
+    });
+    if (!response.ok) {
+      const err = await response.json().catch(() => ({}));
+      throw new Error(err.detail || 'Failed to update provider');
+    }
+    return response.json();
+  },
+
+  async deleteProvider(name) {
+    const response = await fetch(`${API_BASE}/api/providers/${encodeURIComponent(name)}`, {
+      method: 'DELETE',
+    });
+    if (!response.ok) {
+      const err = await response.json().catch(() => ({}));
+      throw new Error(err.detail || 'Failed to delete provider');
+    }
+    return response.json();
+  },
+
+  //  Streaming
 
   async sendMessageStream(conversationId, content, onEvent, modelSet = null) {
     const body = { content };

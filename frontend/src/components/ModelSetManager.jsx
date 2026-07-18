@@ -17,6 +17,8 @@ export default function ModelSetManager({ onBack }) {
   const [error, setError] = useState(null);
   const [saving, setSaving] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
+  const [providerFilter, setProviderFilter] = useState('');
+  const [providers, setProviders] = useState({});
   const [deleteConfirm, setDeleteConfirm] = useState(null);
 
   // Form state
@@ -36,13 +38,15 @@ export default function ModelSetManager({ onBack }) {
   const loadData = async () => {
     setLoading(true);
     try {
-      const [setsData, modelsData] = await Promise.all([
+      const [setsData, modelsData, providersData] = await Promise.all([
         api.listModelSets(),
         api.listAvailableModels(),
+        api.listProviders(),
       ]);
       setSets(setsData.sets);
       setActive(setsData.active);
       setAvailableModels(modelsData.models);
+      setProviders(providersData.providers);
     } catch (e) {
       setError(e.message);
     } finally {
@@ -51,14 +55,20 @@ export default function ModelSetManager({ onBack }) {
   };
 
   const filteredModels = useMemo(() => {
-    if (!searchQuery) return availableModels;
-    const q = searchQuery.toLowerCase();
-    return availableModels.filter(
-      (m) =>
-        m.id.toLowerCase().includes(q) ||
-        m.name.toLowerCase().includes(q)
-    );
-  }, [availableModels, searchQuery]);
+    let models = availableModels;
+    if (providerFilter) {
+      models = models.filter((m) => m.provider === providerFilter);
+    }
+    if (searchQuery) {
+      const q = searchQuery.toLowerCase();
+      models = models.filter(
+        (m) =>
+          m.id.toLowerCase().includes(q) ||
+          m.name.toLowerCase().includes(q)
+      );
+    }
+    return models;
+  }, [availableModels, searchQuery, providerFilter]);
 
   const startCreate = () => {
     setForm({
@@ -144,9 +154,7 @@ export default function ModelSetManager({ onBack }) {
       const council = prev.council.includes(modelId)
         ? prev.council.filter((m) => m !== modelId)
         : [...prev.council, modelId];
-      // If chairman was removed from council, clear it
-      const chairman = council.includes(prev.chairman) ? prev.chairman : '';
-      return { ...prev, council, chairman };
+      return { ...prev, council };
     });
   };
 
@@ -309,13 +317,25 @@ export default function ModelSetManager({ onBack }) {
         <div className="msm-model-picker">
           <div className="msm-picker-header">
             <h3>Select Council Models ({form.council.length} selected)</h3>
-            <input
-              type="text"
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
-              placeholder="Search models..."
-              className="msm-search"
-            />
+            <div className="msm-picker-filters">
+              <select
+                value={providerFilter}
+                onChange={(e) => setProviderFilter(e.target.value)}
+                className="msm-provider-filter"
+              >
+                <option value="">All Providers</option>
+                {Object.keys(providers).map((p) => (
+                  <option key={p} value={p}>{p}</option>
+                ))}
+              </select>
+              <input
+                type="text"
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                placeholder="Search models..."
+                className="msm-search"
+              />
+            </div>
           </div>
 
           <div className="msm-model-list">
@@ -338,6 +358,9 @@ export default function ModelSetManager({ onBack }) {
                     <div className="msm-model-id">{m.id}</div>
                   </div>
                   <div className="msm-model-meta">
+                    <span className={`msm-provider-badge provider-${m.provider}`}>
+                      {m.provider}
+                    </span>
                     {formatPrice(m.pricing) && (
                       <span className="msm-model-price">{formatPrice(m.pricing)}</span>
                     )}
@@ -361,9 +384,9 @@ export default function ModelSetManager({ onBack }) {
             className="msm-select"
           >
             <option value="">-- Select chairman --</option>
-            {form.council.map((m) => (
-              <option key={m} value={m}>
-                {m.split('/')[1]?.replace(/:free$/, '') ?? m} ({m})
+            {availableModels.map((m) => (
+              <option key={m.id} value={m.id}>
+                {m.name} ({m.provider})
               </option>
             ))}
           </select>

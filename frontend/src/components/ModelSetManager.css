@@ -536,3 +536,40 @@
 .msm-cancel-btn:hover {
   background: #f9fafb;
 }
+
+/* ── Provider Filter & Badge ──────────────────────────────────────────────── */
+
+.msm-picker-filters {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.msm-provider-filter {
+  padding: 6px 12px;
+  border: 1px solid #d1d5db;
+  border-radius: 6px;
+  font-size: 13px;
+  background: white;
+  color: #1f2937;
+}
+
+.msm-provider-filter:focus {
+  outline: none;
+  border-color: #4a90e2;
+}
+
+.msm-provider-badge {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 4px;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.provider-openrouter { background: #e3f2fd; color: #1565c0; }
+.provider-qwen-free { background: #fce4ec; color: #c62828; }
+.provider-deepseek-free { background: #e8f5e9; color: #2e7d32; }
+.provider-glmkimi-free { background: #fff3e0; color: #e65100; }
