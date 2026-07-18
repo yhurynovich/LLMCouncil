@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import Sidebar from './components/Sidebar';
 import ChatInterface from './components/ChatInterface';
 import ModelSetSelector from './components/ModelSetSelector';
@@ -14,6 +14,7 @@ function App() {
   const [activeModelSet, setActiveModelSet] = useState(null);
   const [view, setView] = useState('chat'); // 'chat' or 'manage-sets'
   const [quickMode, setQuickMode] = useState(false);
+  const abortRef = useRef(null);
 
   useEffect(() => {
     loadConversations();
@@ -73,9 +74,20 @@ function App() {
     }
   };
 
+  const handleStop = () => {
+    if (abortRef.current) {
+      abortRef.current.abort();
+      abortRef.current = null;
+    }
+    setIsLoading(false);
+  };
+
   const handleSendMessage = async (content) => {
     if (!currentConversationId) return;
     setIsLoading(true);
+
+    const controller = new AbortController();
+    abortRef.current = controller;
 
     try {
       const userMessage = { role: 'user', content };
@@ -201,19 +213,22 @@ function App() {
           }
         },
         activeModelSet,
-        quickMode
+        quickMode,
+        controller.signal
       );
     } catch (error) {
-      console.error('Failed to send message:', error);
-      setCurrentConversation((prev) => ({
-        ...prev,
-        messages: prev.messages.slice(0, -2),
-      }));
+      if (error.name === 'AbortError') {
+        // User cancelled — keep partial results
+      } else {
+        console.error('Failed to send message:', error);
+        setCurrentConversation((prev) => ({
+          ...prev,
+          messages: prev.messages.slice(0, -2),
+        }));
+      }
       setIsLoading(false);
     } finally {
-      // ── Final safety net: if the stream ends (Promise resolves) and
-      // isLoading is still true, clear it. Covers any edge case where
-      // neither 'complete' nor 'stage3_complete' was received.
+      abortRef.current = null;
       setIsLoading(false);
     }
   };
@@ -238,6 +253,7 @@ function App() {
         <ChatInterface
           conversation={currentConversation}
           onSendMessage={handleSendMessage}
+          onStop={handleStop}
           isLoading={isLoading}
           quickMode={quickMode}
           onQuickModeChange={setQuickMode}

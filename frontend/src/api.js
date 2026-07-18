@@ -145,7 +145,7 @@ export const api = {
 
   //  Streaming
 
-  async sendMessageStream(conversationId, content, onEvent, modelSet = null, quick = false) {
+  async sendMessageStream(conversationId, content, onEvent, modelSet = null, quick = false, signal = null) {
     const body = { content, quick };
     if (modelSet) body.model_set = modelSet;
 
@@ -155,6 +155,7 @@ export const api = {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body),
+        signal,
       }
     );
 
