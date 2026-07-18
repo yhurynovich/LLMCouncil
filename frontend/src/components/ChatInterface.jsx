@@ -124,15 +124,6 @@ export default function ChatInterface({
       </div>
 
       <form className="input-form" onSubmit={handleSubmit}>
-        <button
-          type="button"
-          className={`quick-button ${quickMode ? 'active' : ''}`}
-          onClick={() => onQuickModeChange(!quickMode)}
-          disabled={isLoading}
-          title={quickMode ? 'Quick mode ON: Skip peer ranking & synthesis' : 'Click to enable quick mode'}
-        >
-          ⚡
-        </button>
         <textarea
           className="message-input"
           placeholder="Ask a follow-up... (Shift+Enter for new line, Enter to send)"
@@ -142,23 +133,34 @@ export default function ChatInterface({
           disabled={isLoading}
           rows={3}
         />
-        {isLoading ? (
+        <div className="button-column">
           <button
             type="button"
-            className="stop-button"
-            onClick={onStop}
+            className={`quick-button ${quickMode ? 'active' : ''}`}
+            onClick={() => onQuickModeChange(!quickMode)}
+            disabled={isLoading}
+            title={quickMode ? 'Quick mode ON: Skip peer ranking & synthesis' : 'Click to enable quick mode'}
           >
-            Stop
+            ⚡
           </button>
-        ) : (
-          <button
-            type="submit"
-            className="send-button"
-            disabled={!input.trim()}
-          >
-            Send
-          </button>
-        )}
+          {isLoading ? (
+            <button
+              type="button"
+              className="stop-button"
+              onClick={onStop}
+            >
+              Stop
+            </button>
+          ) : (
+            <button
+              type="submit"
+              className="send-button"
+              disabled={!input.trim()}
+            >
+              Send
+            </button>
+          )}
+        </div>
       </form>
     </div>
   );
