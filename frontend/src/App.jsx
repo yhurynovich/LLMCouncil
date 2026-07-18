@@ -13,6 +13,7 @@ function App() {
   const [isLoading, setIsLoading] = useState(false);
   const [activeModelSet, setActiveModelSet] = useState(null);
   const [view, setView] = useState('chat'); // 'chat' or 'manage-sets'
+  const [quickMode, setQuickMode] = useState(false);
 
   useEffect(() => {
     loadConversations();
@@ -57,6 +58,19 @@ function App() {
 
   const handleSelectConversation = (id) => {
     setCurrentConversationId(id);
+  };
+
+  const handleDeleteConversation = async (id) => {
+    try {
+      await api.deleteConversation(id);
+      setConversations((prev) => prev.filter((c) => c.id !== id));
+      if (currentConversationId === id) {
+        setCurrentConversationId(null);
+        setCurrentConversation(null);
+      }
+    } catch (error) {
+      console.error('Failed to delete conversation:', error);
+    }
   };
 
   const handleSendMessage = async (content) => {
@@ -186,7 +200,8 @@ function App() {
               console.log('Unknown event type:', eventType);
           }
         },
-        activeModelSet
+        activeModelSet,
+        quickMode
       );
     } catch (error) {
       console.error('Failed to send message:', error);
@@ -213,6 +228,7 @@ function App() {
           setView('chat');
         }}
         onNewConversation={handleNewConversation}
+        onDeleteConversation={handleDeleteConversation}
         modelSetSelector={
           <ModelSetSelector onSetChange={setActiveModelSet} />
         }
@@ -223,6 +239,8 @@ function App() {
           conversation={currentConversation}
           onSendMessage={handleSendMessage}
           isLoading={isLoading}
+          quickMode={quickMode}
+          onQuickModeChange={setQuickMode}
         />
       ) : (
         <ModelSetManager onBack={() => setView('chat')} />

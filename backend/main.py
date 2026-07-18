@@ -42,6 +42,7 @@ class CreateConversationRequest(BaseModel):
 class SendMessageRequest(BaseModel):
     content: str
     model_set: Optional[str] = None  # if provided, overrides active set for this request
+    quick: bool = False  # skip Stage 2 & 3, return Stage 1 only
 
 class SetModelSetRequest(BaseModel):
     set_id: str
@@ -336,6 +337,13 @@ async def get_conversation(conversation_id: str):
     return conversation
 
 
+@app.delete("/api/conversations/{conversation_id}")
+async def delete_conversation(conversation_id: str):
+    if not storage.delete_conversation(conversation_id):
+        raise HTTPException(status_code=404, detail="Conversation not found")
+    return {"ok": True}
+
+
 @app.post("/api/conversations/{conversation_id}/message/stream")
 async def send_message_stream(conversation_id: str, request: SendMessageRequest):
     conversation = storage.get_conversation(conversation_id)
@@ -375,25 +383,26 @@ async def send_message_stream(conversation_id: str, request: SendMessageRequest)
             print(f"[STREAM] Stage 1 complete: {len(stage1_results)} responses", flush=True)
             yield f"data: {json.dumps({'type': 'stage1_complete', 'data': stage1_results})}\n\n"
 
-            # Stage 2
-            print(f"[STREAM] Stage 2 starting", flush=True)
-            yield f"data: {json.dumps({'type': 'stage2_start'})}\n\n"
-            responding_models = [r["model"] for r in stage1_results]
-            stage2_results, label_to_model = await stage2_collect_rankings(
-                request.content, stage1_results, responding_models
-            )
-            aggregate_rankings = calculate_aggregate_rankings(stage2_results, label_to_model)
-            print(f"[STREAM] Stage 2 complete", flush=True)
-            yield f"data: {json.dumps({'type': 'stage2_complete', 'data': stage2_results, 'metadata': {'label_to_model': label_to_model, 'aggregate_rankings': aggregate_rankings}})}\n\n"
+            if not request.quick:
+                # Stage 2
+                print(f"[STREAM] Stage 2 starting", flush=True)
+                yield f"data: {json.dumps({'type': 'stage2_start'})}\n\n"
+                responding_models = [r["model"] for r in stage1_results]
+                stage2_results, label_to_model = await stage2_collect_rankings(
+                    request.content, stage1_results, responding_models
+                )
+                aggregate_rankings = calculate_aggregate_rankings(stage2_results, label_to_model)
+                print(f"[STREAM] Stage 2 complete", flush=True)
+                yield f"data: {json.dumps({'type': 'stage2_complete', 'data': stage2_results, 'metadata': {'label_to_model': label_to_model, 'aggregate_rankings': aggregate_rankings}})}\n\n"
 
-            # Stage 3
-            print(f"[STREAM] Stage 3 starting", flush=True)
-            yield f"data: {json.dumps({'type': 'stage3_start'})}\n\n"
-            stage3_result = await stage3_synthesize_final(
-                request.content, stage1_results, stage2_results, chairman_model
-            )
-            print(f"[STREAM] Stage 3 complete", flush=True)
-            yield f"data: {json.dumps({'type': 'stage3_complete', 'data': stage3_result})}\n\n"
+                # Stage 3
+                print(f"[STREAM] Stage 3 starting", flush=True)
+                yield f"data: {json.dumps({'type': 'stage3_start'})}\n\n"
+                stage3_result = await stage3_synthesize_final(
+                    request.content, stage1_results, stage2_results, chairman_model
+                )
+                print(f"[STREAM] Stage 3 complete", flush=True)
+                yield f"data: {json.dumps({'type': 'stage3_complete', 'data': stage3_result})}\n\n"
 
             # Title
             if title_task:

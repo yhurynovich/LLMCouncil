@@ -29,6 +29,14 @@ export const api = {
     return response.json();
   },
 
+  async deleteConversation(conversationId) {
+    const response = await fetch(`${API_BASE}/api/conversations/${conversationId}`, {
+      method: 'DELETE',
+    });
+    if (!response.ok) throw new Error('Failed to delete conversation');
+    return response.json();
+  },
+
   //  Model Sets 
 
   async listModelSets() {
@@ -137,8 +145,8 @@ export const api = {
 
   //  Streaming
 
-  async sendMessageStream(conversationId, content, onEvent, modelSet = null) {
-    const body = { content };
+  async sendMessageStream(conversationId, content, onEvent, modelSet = null, quick = false) {
+    const body = { content, quick };
     if (modelSet) body.model_set = modelSet;
 
     const response = await fetch(

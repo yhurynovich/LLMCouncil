@@ -57,6 +57,35 @@
   font-size: 12px;
   margin-bottom: 12px;
   font-family: monospace;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.response-time-badge {
+  display: inline-block;
+  padding: 2px 8px;
+  background: #e0f2fe;
+  color: #0369a1;
+  border-radius: 10px;
+  font-size: 11px;
+  font-weight: 500;
+}
+
+.tab-time {
+  display: inline-block;
+  margin-left: 6px;
+  padding: 1px 6px;
+  background: #f3f4f6;
+  color: #6b7280;
+  border-radius: 8px;
+  font-size: 11px;
+  font-weight: 400;
+}
+
+.tab.active .tab-time {
+  background: #dbeafe;
+  color: #1d4ed8;
 }
 
 .response-text {

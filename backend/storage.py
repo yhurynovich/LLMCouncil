@@ -7,6 +7,8 @@ from typing import List, Dict, Any, Optional
 from pathlib import Path
 from .config import DATA_DIR
 
+MAX_CONVERSATIONS = 50
+
 
 def ensure_data_dir():
     """Ensure the data directory exists."""
@@ -16,6 +18,32 @@ def ensure_data_dir():
 def get_conversation_path(conversation_id: str) -> str:
     """Get the file path for a conversation."""
     return os.path.join(DATA_DIR, f"{conversation_id}.json")
+
+
+def enforce_retention():
+    """Delete oldest conversations beyond MAX_CONVERSATIONS."""
+    ensure_data_dir()
+    files = []
+    for f in os.listdir(DATA_DIR):
+        if f.endswith(".json"):
+            path = os.path.join(DATA_DIR, f)
+            try:
+                with open(path, "r") as fh:
+                    data = json.load(fh)
+                files.append((data.get("created_at", ""), path))
+            except (json.JSONDecodeError, OSError):
+                continue
+
+    if len(files) <= MAX_CONVERSATIONS:
+        return
+
+    files.sort(key=lambda x: x[0])  # oldest first
+    to_delete = files[: len(files) - MAX_CONVERSATIONS]
+    for _, path in to_delete:
+        try:
+            os.remove(path)
+        except OSError:
+            pass
 
 
 def create_conversation(conversation_id: str) -> Dict[str, Any]:
@@ -41,6 +69,8 @@ def create_conversation(conversation_id: str) -> Dict[str, Any]:
     path = get_conversation_path(conversation_id)
     with open(path, 'w') as f:
         json.dump(conversation, f, indent=2)
+
+    enforce_retention()
 
     return conversation
 
@@ -170,3 +200,12 @@ def update_conversation_title(conversation_id: str, title: str):
 
     conversation["title"] = title
     save_conversation(conversation)
+
+
+def delete_conversation(conversation_id: str) -> bool:
+    """Delete a conversation file. Returns True if deleted."""
+    path = get_conversation_path(conversation_id)
+    if not os.path.exists(path):
+        return False
+    os.remove(path)
+    return True

@@ -1,6 +1,7 @@
 """Generic LLM client — routes queries to the correct provider."""
 import asyncio
 import json
+import time
 import httpx
 from typing import Any
 
@@ -57,6 +58,7 @@ async def query_model(
 
     async with httpx.AsyncClient(timeout=120.0) as client:
         try:
+            t0 = time.monotonic()
             resp = await client.post(base_url, headers=headers, json=payload)
             resp.raise_for_status()
             data = resp.json()
@@ -82,7 +84,8 @@ async def query_model(
                 resp2.raise_for_status()
                 msg = resp2.json()["choices"][0]["message"]
 
-            result: dict[str, Any] = {"content": msg.get("content", "")}
+            elapsed = round(time.monotonic() - t0, 2)
+            result: dict[str, Any] = {"content": msg.get("content", ""), "response_time": elapsed}
             if "reasoning_details" in msg:
                 result["reasoning_details"] = msg["reasoning_details"]
             return result

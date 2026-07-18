@@ -102,11 +102,39 @@
 
 .input-form {
   display: flex;
-  align-items: flex-end;
+  flex-direction: column;
   gap: 12px;
   padding: 24px;
   border-top: 1px solid #e0e0e0;
   background: #fafafa;
+}
+
+.input-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.quick-toggle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+  user-select: none;
+}
+
+.quick-toggle input {
+  cursor: pointer;
+}
+
+.quick-label {
+  font-size: 13px;
+  color: #666;
+}
+
+.quick-toggle input:checked + .quick-label {
+  color: #4a90e2;
+  font-weight: 500;
 }
 
 .message-input {

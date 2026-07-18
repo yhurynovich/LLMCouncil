@@ -55,6 +55,7 @@
   border-radius: 6px;
   cursor: pointer;
   transition: background 0.2s;
+  position: relative;
 }
 
 .conversation-item:hover {
@@ -75,6 +76,72 @@
 .conversation-meta {
   color: #999;
   font-size: 12px;
+}
+
+.conversation-delete-btn {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  width: 22px;
+  height: 22px;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: #999;
+  font-size: 16px;
+  cursor: pointer;
+  display: none;
+  align-items: center;
+  justify-content: center;
+  line-height: 1;
+}
+
+.conversation-item:hover .conversation-delete-btn {
+  display: flex;
+}
+
+.conversation-delete-btn:hover {
+  background: #fee2e2;
+  color: #dc2626;
+}
+
+.conversation-delete-dialog {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  background: white;
+  border: 1px solid #e5e7eb;
+  border-radius: 6px;
+  padding: 4px 6px;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.12);
+  z-index: 10;
+}
+
+.conversation-delete-dialog span {
+  font-size: 12px;
+  color: #374151;
+  margin-right: 2px;
+}
+
+.delete-confirm-btn, .delete-cancel-btn {
+  padding: 2px 8px;
+  border: none;
+  border-radius: 4px;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.delete-confirm-btn {
+  background: #dc2626;
+  color: white;
+}
+
+.delete-cancel-btn {
+  background: #e5e7eb;
+  color: #374151;
 }
 
 /* ── Model Set Selector footer ─────────────────────────────────────────────── */

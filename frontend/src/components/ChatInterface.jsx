@@ -9,6 +9,8 @@ export default function ChatInterface({
   conversation,
   onSendMessage,
   isLoading,
+  quickMode,
+  onQuickModeChange,
 }) {
   const [input, setInput] = useState('');
   const messagesEndRef = useRef(null);
@@ -130,13 +132,24 @@ export default function ChatInterface({
           disabled={isLoading}
           rows={3}
         />
-        <button
-          type="submit"
-          className="send-button"
-          disabled={!input.trim() || isLoading}
-        >
-          Send
-        </button>
+        <div className="input-actions">
+          <label className="quick-toggle">
+            <input
+              type="checkbox"
+              checked={quickMode}
+              onChange={(e) => onQuickModeChange(e.target.checked)}
+              disabled={isLoading}
+            />
+            <span className="quick-label">Answer now</span>
+          </label>
+          <button
+            type="submit"
+            className="send-button"
+            disabled={!input.trim() || isLoading}
+          >
+            Send
+          </button>
+        </div>
       </form>
     </div>
   );
