@@ -2,7 +2,7 @@ import ReactMarkdown from 'react-markdown';
 import './Stage3.css';
 
 export default function Stage3({ finalResponse }) {
-  if (!finalResponse) {
+  if (!finalResponse || !finalResponse.model) {
     return null;
   }
 

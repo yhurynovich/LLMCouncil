@@ -17,7 +17,7 @@ function deAnonymizeText(text, labelToModel) {
 export default function Stage2({ rankings, labelToModel, aggregateRankings }) {
   const [activeTab, setActiveTab] = useState(0);
 
-  if (!rankings || rankings.length === 0) {
+  if (!rankings || !Array.isArray(rankings) || rankings.length === 0) {
     return null;
   }
 
@@ -38,18 +38,18 @@ export default function Stage2({ rankings, labelToModel, aggregateRankings }) {
             className={`tab ${activeTab === index ? 'active' : ''}`}
             onClick={() => setActiveTab(index)}
           >
-            {rank.model.split('/')[1] || rank.model}
+            {rank.model ? (rank.model.split('/')[1] || rank.model) : 'Unknown'}
           </button>
         ))}
       </div>
 
       <div className="tab-content">
         <div className="ranking-model">
-          {rankings[activeTab].model}
+          {rankings[activeTab].model || 'Unknown'}
         </div>
         <div className="ranking-content markdown-content">
           <ReactMarkdown>
-            {deAnonymizeText(rankings[activeTab].ranking, labelToModel)}
+            {deAnonymizeText(rankings[activeTab].ranking || '', labelToModel)}
           </ReactMarkdown>
         </div>
 
@@ -81,7 +81,7 @@ export default function Stage2({ rankings, labelToModel, aggregateRankings }) {
               <div key={index} className="aggregate-item">
                 <span className="rank-position">#{index + 1}</span>
                 <span className="rank-model">
-                  {agg.model.split('/')[1] || agg.model}
+                  {agg.model ? (agg.model.split('/')[1] || agg.model) : 'Unknown'}
                 </span>
                 <span className="rank-score">
                   Avg: {agg.average_rank.toFixed(2)}

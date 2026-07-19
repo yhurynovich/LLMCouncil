@@ -5,7 +5,7 @@ import './Stage1.css';
 export default function Stage1({ responses }) {
   const [activeTab, setActiveTab] = useState(0);
 
-  if (!responses || responses.length === 0) {
+  if (!responses || !Array.isArray(responses) || responses.length === 0) {
     return null;
   }
 
@@ -25,7 +25,7 @@ export default function Stage1({ responses }) {
             className={`tab ${activeTab === index ? 'active' : ''}`}
             onClick={() => setActiveTab(index)}
           >
-            {resp.model.split('/')[1] || resp.model}
+            {resp.model ? (resp.model.split('/')[1] || resp.model) : 'Unknown'}
             {resp.response_time != null && (
               <span className="tab-time">{formatTime(resp.response_time)}</span>
             )}
@@ -35,7 +35,7 @@ export default function Stage1({ responses }) {
 
       <div className="tab-content">
         <div className="model-name">
-          {responses[activeTab].model}
+          {responses[activeTab].model || 'Unknown'}
           {responses[activeTab].response_time != null && (
             <span className="response-time-badge">
               {formatTime(responses[activeTab].response_time)}
@@ -43,7 +43,7 @@ export default function Stage1({ responses }) {
           )}
         </div>
         <div className="response-text markdown-content">
-          <ReactMarkdown>{responses[activeTab].response}</ReactMarkdown>
+          <ReactMarkdown>{responses[activeTab].response || ''}</ReactMarkdown>
         </div>
       </div>
     </div>
