@@ -1,6 +1,6 @@
 """FastAPI backend for LLM Council."""
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
@@ -14,6 +14,7 @@ import httpx
 from . import storage
 from . import config as cfg
 from . import providers as prov
+from . import uploads
 from .council import (
     run_full_council,
     generate_conversation_title,
@@ -33,16 +34,22 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-
 # ── Pydantic models ───────────────────────────────────────────────────────────
 
 class CreateConversationRequest(BaseModel):
     pass
 
+class FileAttachment(BaseModel):
+    file_id: str
+    filename: str
+    type: str  # "text" or "image"
+    ext: str
+
 class SendMessageRequest(BaseModel):
     content: str
     model_set: Optional[str] = None  # if provided, overrides active set for this request
     quick: bool = False  # skip Stage 2 & 3, return Stage 1 only
+    files: List[FileAttachment] = []
 
 class SetModelSetRequest(BaseModel):
     set_id: str
@@ -326,6 +333,18 @@ async def list_available_models():
     return {"models": all_models}
 
 
+# ── File Uploads ────────────────────────────────────────────────────────────
+
+@app.post("/api/upload")
+async def upload_file(file: UploadFile = File(...)):
+    """Upload a file for chat attachment."""
+    try:
+        result = await uploads.save_upload(file)
+        return result
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
 # ── Conversations ─────────────────────────────────────────────────────────────
 
 @app.get("/api/conversations", response_model=List[ConversationMetadata])
@@ -388,9 +407,9 @@ async def send_message_stream(conversation_id: str, request: SendMessageRequest)
                 )
 
             # Stage 1
-            print(f"[STREAM] Stage 1 starting — set={set_id}, models={council_models}, quick={request.quick}", flush=True)
+            print(f"[STREAM] Stage 1 starting — set={set_id}, models={council_models}, quick={request.quick}, files={len(request.files)}", flush=True)
             yield f"data: {json.dumps({'type': 'stage1_start'})}\n\n"
-            stage1_results = await stage1_collect_responses(request.content, council_models)
+            stage1_results = await stage1_collect_responses(request.content, council_models, files=request.files)
             print(f"[STREAM] Stage 1 complete: {len(stage1_results)} responses", flush=True)
             yield f"data: {json.dumps({'type': 'stage1_complete', 'data': stage1_results})}\n\n"
 

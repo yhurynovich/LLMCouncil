@@ -212,3 +212,76 @@
   background: #b91c1c;
   border-color: #b91c1c;
 }
+
+/* ── File Attachments ─────────────────────────────────────────────────────── */
+
+.input-form.drag-over {
+  border-color: #4a90e2;
+  background: #eff6ff;
+}
+
+.input-row {
+  display: flex;
+  align-items: flex-end;
+  gap: 12px;
+  width: 100%;
+}
+
+.attach-button {
+  width: 44px;
+  height: 44px;
+  border: 2px solid #d0d0d0;
+  border-radius: 8px;
+  background: #fff;
+  font-size: 20px;
+  cursor: pointer;
+  transition: all 0.2s;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.attach-button:hover {
+  border-color: #4a90e2;
+  background: #eff6ff;
+}
+
+.attached-files {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.file-chip {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  background: #f3f4f6;
+  border: 1px solid #e5e7eb;
+  border-radius: 16px;
+  font-size: 13px;
+}
+
+.file-chip-name {
+  max-width: 150px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.file-chip-remove {
+  background: none;
+  border: none;
+  color: #9ca3af;
+  cursor: pointer;
+  font-size: 16px;
+  padding: 0 2px;
+  line-height: 1;
+}
+
+.file-chip-remove:hover {
+  color: #dc2626;
+}

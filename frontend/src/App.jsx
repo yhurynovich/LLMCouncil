@@ -82,7 +82,7 @@ function App() {
     setIsLoading(false);
   };
 
-  const handleSendMessage = async (content) => {
+  const handleSendMessage = async (content, files = []) => {
     if (!currentConversationId) return;
     setIsLoading(true);
 
@@ -214,7 +214,8 @@ function App() {
         },
         activeModelSet,
         quickMode,
-        controller.signal
+        controller.signal,
+        files
       );
     } catch (error) {
       if (error.name === 'AbortError') {

@@ -3,13 +3,39 @@
 from typing import List, Dict, Any, Tuple, Optional
 from .llm_client import query_models_parallel, query_model
 from .config import COUNCIL_MODELS, CHAIRMAN_MODEL, get_chairman_model
+from .uploads import read_file_content, get_image_base64
+
+
+def build_message_with_files(user_query: str, files: list) -> tuple[str, list]:
+    """Prepends file content to user query. Returns (text_message, image_urls)."""
+    if not files:
+        return user_query, []
+
+    parts = []
+    image_urls = []
+
+    for f in files:
+        if f.type == "text":
+            content = read_file_content(f.file_id, f.ext)
+            parts.append(f"File: {f.filename}\n```\n{content}\n```")
+        elif f.type == "image":
+            b64 = get_image_base64(f.file_id, f.ext)
+            if b64:
+                mime = f"image/{f.ext.lstrip('.')}"
+                image_urls.append(f"data:{mime};base64,{b64}")
+
+    if parts:
+        return "\n\n".join(parts) + "\n\n" + user_query, image_urls
+    return user_query, image_urls
 
 
 async def stage1_collect_responses(
     user_query: str,
     council_models: Optional[List[str]] = None,
+    files: Optional[list] = None,
 ) -> List[Dict[str, Any]]:
-    messages = [{"role": "user", "content": user_query}]
+    text_message, image_urls = build_message_with_files(user_query, files or [])
+    messages = [{"role": "user", "content": text_message}]
     models = council_models if council_models is not None else COUNCIL_MODELS
     responses = await query_models_parallel(models, messages)
 

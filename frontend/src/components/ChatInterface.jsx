@@ -3,6 +3,7 @@ import ReactMarkdown from 'react-markdown';
 import Stage1 from './Stage1';
 import Stage2 from './Stage2';
 import Stage3 from './Stage3';
+import { api } from '../api';
 import './ChatInterface.css';
 
 export default function ChatInterface({
@@ -14,7 +15,10 @@ export default function ChatInterface({
   onQuickModeChange,
 }) {
   const [input, setInput] = useState('');
+  const [attachedFiles, setAttachedFiles] = useState([]);
+  const [isDragging, setIsDragging] = useState(false);
   const messagesEndRef = useRef(null);
+  const fileInputRef = useRef(null);
 
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -26,18 +30,56 @@ export default function ChatInterface({
 
   const handleSubmit = (e) => {
     e.preventDefault();
-    if (input.trim() && !isLoading) {
-      onSendMessage(input);
+    if ((input.trim() || attachedFiles.length > 0) && !isLoading) {
+      onSendMessage(input, attachedFiles);
       setInput('');
+      setAttachedFiles([]);
     }
   };
 
   const handleKeyDown = (e) => {
-    // Submit on Enter (without Shift)
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
       handleSubmit(e);
     }
+  };
+
+  const handleFileSelect = async (e) => {
+    const files = Array.from(e.target.files || []);
+    for (const file of files) {
+      try {
+        const result = await api.uploadFile(file);
+        setAttachedFiles(prev => [...prev, result]);
+      } catch (err) {
+        console.error('Failed to upload:', err);
+      }
+    }
+    if (fileInputRef.current) fileInputRef.current.value = '';
+  };
+
+  const handleDragOver = (e) => {
+    e.preventDefault();
+    setIsDragging(true);
+  };
+
+  const handleDragLeave = () => setIsDragging(false);
+
+  const handleDrop = async (e) => {
+    e.preventDefault();
+    setIsDragging(false);
+    const files = Array.from(e.dataTransfer.files);
+    for (const file of files) {
+      try {
+        const result = await api.uploadFile(file);
+        setAttachedFiles(prev => [...prev, result]);
+      } catch (err) {
+        console.error('Failed to upload:', err);
+      }
+    }
+  };
+
+  const removeFile = (fileId) => {
+    setAttachedFiles(prev => prev.filter(f => f.file_id !== fileId));
   };
 
   if (!conversation) {
@@ -75,7 +117,6 @@ export default function ChatInterface({
                 <div className="assistant-message">
                   <div className="message-label">LLM Council</div>
 
-                  {/* Stage 1 */}
                   {msg.loading?.stage1 && (
                     <div className="stage-loading">
                       <div className="spinner"></div>
@@ -84,7 +125,6 @@ export default function ChatInterface({
                   )}
                   {msg.stage1 && <Stage1 responses={msg.stage1} />}
 
-                  {/* Stage 2 */}
                   {msg.loading?.stage2 && (
                     <div className="stage-loading">
                       <div className="spinner"></div>
@@ -99,7 +139,6 @@ export default function ChatInterface({
                     />
                   )}
 
-                  {/* Stage 3 */}
                   {msg.loading?.stage3 && (
                     <div className="stage-loading">
                       <div className="spinner"></div>
@@ -123,43 +162,85 @@ export default function ChatInterface({
         <div ref={messagesEndRef} />
       </div>
 
-      <form className="input-form" onSubmit={handleSubmit}>
-        <textarea
-          className="message-input"
-          placeholder="Ask a follow-up... (Shift+Enter for new line, Enter to send)"
-          value={input}
-          onChange={(e) => setInput(e.target.value)}
-          onKeyDown={handleKeyDown}
-          disabled={isLoading}
-          rows={3}
-        />
-        <div className="button-column">
+      <form
+        className={`input-form ${isDragging ? 'drag-over' : ''}`}
+        onSubmit={handleSubmit}
+        onDragOver={handleDragOver}
+        onDragLeave={handleDragLeave}
+        onDrop={handleDrop}
+      >
+        {attachedFiles.length > 0 && (
+          <div className="attached-files">
+            {attachedFiles.map(f => (
+              <div key={f.file_id} className="file-chip">
+                {f.type === 'image' ? '🖼' : '📄'}
+                <span className="file-chip-name">{f.filename}</span>
+                <button
+                  type="button"
+                  className="file-chip-remove"
+                  onClick={() => removeFile(f.file_id)}
+                >
+                  ×
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
+        <div className="input-row">
+          <input
+            type="file"
+            ref={fileInputRef}
+            onChange={handleFileSelect}
+            multiple
+            accept=".txt,.md,.csv,.json,.py,.js,.ts,.html,.css,.yaml,.yml,.toml,.xml,.log,.png,.jpg,.jpeg,.gif,.webp"
+            style={{ display: 'none' }}
+          />
           <button
             type="button"
-            className={`quick-button ${quickMode ? 'active' : ''}`}
-            onClick={() => onQuickModeChange(!quickMode)}
+            className="attach-button"
+            onClick={() => fileInputRef.current?.click()}
             disabled={isLoading}
-            title={quickMode ? 'Quick mode ON: Skip peer ranking & synthesis' : 'Click to enable quick mode'}
+            title="Attach file"
           >
-            ⚡
+            📎
           </button>
-          {isLoading ? (
+          <textarea
+            className="message-input"
+            placeholder={isDragging ? "Drop files here..." : "Ask a follow-up... (Shift+Enter for new line, Enter to send)"}
+            value={input}
+            onChange={(e) => setInput(e.target.value)}
+            onKeyDown={handleKeyDown}
+            disabled={isLoading}
+            rows={3}
+          />
+          <div className="button-column">
             <button
               type="button"
-              className="stop-button"
-              onClick={onStop}
+              className={`quick-button ${quickMode ? 'active' : ''}`}
+              onClick={() => onQuickModeChange(!quickMode)}
+              disabled={isLoading}
+              title={quickMode ? 'Quick mode ON: Skip peer ranking & synthesis' : 'Click to enable quick mode'}
             >
-              Stop
+              ⚡
             </button>
-          ) : (
-            <button
-              type="submit"
-              className="send-button"
-              disabled={!input.trim()}
-            >
-              Send
-            </button>
-          )}
+            {isLoading ? (
+              <button
+                type="button"
+                className="stop-button"
+                onClick={onStop}
+              >
+                Stop
+              </button>
+            ) : (
+              <button
+                type="submit"
+                className="send-button"
+                disabled={!input.trim() && attachedFiles.length === 0}
+              >
+                Send
+              </button>
+            )}
+          </div>
         </div>
       </form>
     </div>

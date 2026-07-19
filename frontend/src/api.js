@@ -143,10 +143,26 @@ export const api = {
     return response.json();
   },
 
+  //  File Uploads
+
+  async uploadFile(file) {
+    const formData = new FormData();
+    formData.append('file', file);
+    const response = await fetch(`${API_BASE}/api/upload`, {
+      method: 'POST',
+      body: formData,
+    });
+    if (!response.ok) {
+      const err = await response.json().catch(() => ({}));
+      throw new Error(err.detail || 'Failed to upload file');
+    }
+    return response.json();
+  },
+
   //  Streaming
 
-  async sendMessageStream(conversationId, content, onEvent, modelSet = null, quick = false, signal = null) {
-    const body = { content, quick };
+  async sendMessageStream(conversationId, content, onEvent, modelSet = null, quick = false, signal = null, files = []) {
+    const body = { content, quick, files };
     if (modelSet) body.model_set = modelSet;
 
     const response = await fetch(
