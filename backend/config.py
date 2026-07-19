@@ -11,6 +11,19 @@ DATA_DIR = "data/conversations"
 
 # Built-in default model sets (used if no persisted file exists)
 DEFAULT_MODEL_SETS = {
+    "search": {
+        "label": "Internet search",
+        "icon": "WWW",
+        "description": "Models with web search capabilities.",
+        "council": [
+            "openrouter/nvidia/nemotron-3-super-120b-a12b:free",
+            "deepseek-free/deepseek-reasoner-search",
+            "qwen-free/qwen3.7-plus",
+            "openrouter/google/gemma-4-31b-it:free",
+            "glmkimi-free/glm-5-deepresearch",
+        ],
+        "chairman": "qwen-free/qwen3.7-max",
+    },
     "free": {
         "label": "Free Tier",
         "icon": "FREE",
