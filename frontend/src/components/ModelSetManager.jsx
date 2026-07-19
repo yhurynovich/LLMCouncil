@@ -151,6 +151,21 @@ export default function ModelSetManager({ onBack }) {
 
   const toggleModel = (modelId) => {
     setForm((prev) => {
+      // Handle model sets: add all models from the set
+      if (modelId.startsWith('set/')) {
+        const setId = modelId.replace('set/', '');
+        const setModels = sets[setId]?.council || [];
+        const allIncluded = setModels.every(m => prev.council.includes(m));
+        if (allIncluded) {
+          // Remove all models from this set
+          return { ...prev, council: prev.council.filter(m => !setModels.includes(m)) };
+        } else {
+          // Add all models from this set
+          const newCouncil = [...new Set([...prev.council, ...setModels])];
+          return { ...prev, council: newCouncil };
+        }
+      }
+      // Handle individual models
       const council = prev.council.includes(modelId)
         ? prev.council.filter((m) => m !== modelId)
         : [...prev.council, modelId];
@@ -343,11 +358,19 @@ export default function ModelSetManager({ onBack }) {
               <div className="msm-no-models">No models found</div>
             )}
             {filteredModels.map((m) => {
-              const isSelected = form.council.includes(m.id);
+              const isSet = m.id.startsWith('set/');
+              let isSelected;
+              if (isSet) {
+                const setId = m.id.replace('set/', '');
+                const setModels = sets[setId]?.council || [];
+                isSelected = setModels.length > 0 && setModels.every(model => form.council.includes(model));
+              } else {
+                isSelected = form.council.includes(m.id);
+              }
               return (
                 <div
                   key={m.id}
-                  className={`msm-model-item ${isSelected ? 'selected' : ''}`}
+                  className={`msm-model-item ${isSelected ? 'selected' : ''} ${isSet ? 'model-set-item' : ''}`}
                   onClick={() => toggleModel(m.id)}
                 >
                   <div className="msm-model-check">
@@ -359,7 +382,7 @@ export default function ModelSetManager({ onBack }) {
                   </div>
                   <div className="msm-model-meta">
                     <span className={`msm-provider-badge provider-${m.provider}`}>
-                      {m.provider}
+                      {isSet ? 'set' : m.provider}
                     </span>
                     {formatPrice(m.pricing) && (
                       <span className="msm-model-price">{formatPrice(m.pricing)}</span>

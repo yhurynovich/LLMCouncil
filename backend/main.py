@@ -313,6 +313,16 @@ async def list_available_models():
                     "context_length": None,
                 })
 
+    # Add model sets as selectable virtual models
+    for set_id, ms in cfg.MODEL_SETS.items():
+        all_models.append({
+            "id": f"set/{set_id}",
+            "name": f"{ms['label']} ({len(ms['council'])} models)",
+            "provider": "set",
+            "pricing": {},
+            "context_length": None,
+        })
+
     return {"models": all_models}
 
 

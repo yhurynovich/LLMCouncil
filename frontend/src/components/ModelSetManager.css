@@ -573,3 +573,9 @@
 .provider-qwen-free { background: #fce4ec; color: #c62828; }
 .provider-deepseek-free { background: #e8f5e9; color: #2e7d32; }
 .provider-glmkimi-free { background: #fff3e0; color: #e65100; }
+.provider-set { background: #f3e8ff; color: #7c3aed; }
+
+.model-set-item {
+  background: #faf5ff;
+  border-left: 3px solid #7c3aed;
+}
