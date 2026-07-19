@@ -18,7 +18,8 @@ async def stage1_collect_responses(
         if response is not None:
             stage1_results.append({
                 "model": model,
-                "response": response.get('content', '')
+                "response": response.get('content', ''),
+                "response_time": response.get('response_time'),
             })
     return stage1_results
 
