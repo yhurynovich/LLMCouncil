@@ -24,7 +24,14 @@ from .council import (
     calculate_aggregate_rankings,
 )
 
-app = FastAPI(title="LLM Council API")
+app = FastAPI(
+    title="LLM Council API",
+    description="A multi-model LLM council system with OpenAI-compatible endpoints for Hermes integration.",
+    version="2.0.0",
+    docs_url="/docs",
+    redoc_url="/redoc",
+    openapi_url="/openapi.json",
+)
 
 app.add_middleware(
     CORSMiddleware,
@@ -148,7 +155,7 @@ async def root():
 
 # ── Model Sets ────────────────────────────────────────────────────────────────
 
-@app.get("/api/model-sets")
+@app.get("/api/model-sets", tags=["Model Sets"])
 async def list_model_sets():
     """Return all model sets and the currently active one."""
     sets = {}
@@ -163,7 +170,7 @@ async def list_model_sets():
     return {"sets": sets, "active": cfg.ACTIVE_MODEL_SET}
 
 
-@app.post("/api/model-sets/active")
+@app.post("/api/model-sets/active", tags=["Model Sets"])
 async def set_active_model_set(request: SetModelSetRequest):
     """Switch the active model set."""
     if request.set_id not in cfg.MODEL_SETS:
@@ -179,7 +186,7 @@ async def set_active_model_set(request: SetModelSetRequest):
     }
 
 
-@app.post("/api/model-sets")
+@app.post("/api/model-sets", tags=["Model Sets"])
 async def create_model_set(request: CreateModelSetRequest):
     """Create a new model set."""
     set_id = request.set_id.strip().lower().replace(" ", "-")
@@ -199,7 +206,7 @@ async def create_model_set(request: CreateModelSetRequest):
     return {"ok": True, "set_id": set_id}
 
 
-@app.put("/api/model-sets/{set_id}")
+@app.put("/api/model-sets/{set_id}", tags=["Model Sets"])
 async def update_model_set(set_id: str, request: UpdateModelSetRequest):
     """Update an existing model set."""
     if set_id not in cfg.MODEL_SETS:
@@ -221,7 +228,7 @@ async def update_model_set(set_id: str, request: UpdateModelSetRequest):
     return {"ok": True, "set_id": set_id}
 
 
-@app.delete("/api/model-sets/{set_id}")
+@app.delete("/api/model-sets/{set_id}", tags=["Model Sets"])
 async def delete_model_set(set_id: str):
     """Delete a model set. Built-in sets cannot be deleted."""
     if set_id not in cfg.MODEL_SETS:
@@ -238,13 +245,13 @@ async def delete_model_set(set_id: str):
 
 # ── Providers ──────────────────────────────────────────────────────────────
 
-@app.get("/api/providers")
+@app.get("/api/providers", tags=["Providers"])
 async def list_providers():
     """Return all configured providers."""
     return {"providers": prov.list_providers()}
 
 
-@app.post("/api/providers")
+@app.post("/api/providers", tags=["Providers"])
 async def create_provider(request: CreateProviderRequest):
     """Add a new provider."""
     name = request.name.strip().lower().replace(" ", "-")
@@ -264,7 +271,7 @@ async def create_provider(request: CreateProviderRequest):
     return {"ok": True, "name": name}
 
 
-@app.put("/api/providers/{name}")
+@app.put("/api/providers/{name}", tags=["Providers"])
 async def update_provider(name: str, request: UpdateProviderRequest):
     """Update an existing provider."""
     if name not in prov.PROVIDERS:
@@ -286,7 +293,7 @@ async def update_provider(name: str, request: UpdateProviderRequest):
     return {"ok": True, "name": name}
 
 
-@app.delete("/api/providers/{name}")
+@app.delete("/api/providers/{name}", tags=["Providers"])
 async def delete_provider(name: str):
     """Delete a provider. Cannot delete 'openrouter'."""
     if name not in prov.PROVIDERS:
@@ -299,7 +306,7 @@ async def delete_provider(name: str):
     return {"ok": True}
 
 
-@app.get("/api/available-models")
+@app.get("/api/available-models", tags=["Models"])
 async def list_available_models():
     """Fetch available models from all providers."""
     all_models = []
@@ -377,7 +384,7 @@ async def list_available_models():
 
 # ── OpenAI-compatible endpoints ──────────────────────────────────────────────
 
-@app.get("/v1/models", response_model=OpenAIModelList)
+@app.get("/v1/models", response_model=OpenAIModelList, tags=["OpenAI Compatible"])
 async def openai_list_models():
     """List available models in OpenAI-compatible format."""
     import time
