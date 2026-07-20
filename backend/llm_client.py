@@ -1,6 +1,7 @@
 """Generic LLM client — routes queries to the correct provider."""
 import asyncio
 import json
+import os
 import time
 import httpx
 from typing import Any
@@ -9,6 +10,16 @@ from .providers import get_provider, get_provider_api_key
 from .web_search import SEARCH_TOOL, handle_tool_call
 
 STAGGER_DELAY = 0.5
+
+
+def _get_proxy_url() -> str | None:
+    """Resolve proxy URL from env, preferring HTTP/HTTPS proxy over unsupported schemes."""
+    # Prefer protocol-specific proxies (httpx handles these natively)
+    for var in ("HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy"):
+        val = os.environ.get(var)
+        if val:
+            return val
+    return None
 
 
 def _parse_model_id(model: str) -> tuple[str, str]:
@@ -56,7 +67,8 @@ async def query_model(
         payload["tools"] = [SEARCH_TOOL]
         payload["tool_choice"] = "auto"
 
-    async with httpx.AsyncClient(timeout=120.0) as client:
+    proxy = _get_proxy_url()
+    async with httpx.AsyncClient(timeout=120.0, proxy=proxy, trust_env=False) as client:
         try:
             t0 = time.monotonic()
             resp = await client.post(base_url, headers=headers, json=payload)
