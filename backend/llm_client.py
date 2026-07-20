@@ -57,8 +57,10 @@ async def query_model(
         headers["HTTP-Referer"] = "https://llm-council.local"
         headers["X-Title"] = "LLM Council"
 
+    # Use the provider's configured model name if available, otherwise use the parsed model_id
+    api_model = provider.get("model", model_id)
     payload: dict[str, Any] = {
-        "model": model_id,
+        "model": api_model,
         "messages": messages,
     }
 
@@ -97,7 +99,11 @@ async def query_model(
                 msg = resp2.json()["choices"][0]["message"]
 
             elapsed = round(time.monotonic() - t0, 2)
-            result: dict[str, Any] = {"content": msg.get("content", ""), "response_time": elapsed}
+            content = msg.get("content") or ""
+            if not content.strip():
+                print(f"Error querying {model}: empty response content", flush=True)
+                return {"error": "Model returned empty response"}
+            result: dict[str, Any] = {"content": content, "response_time": elapsed}
             if "reasoning_details" in msg:
                 result["reasoning_details"] = msg["reasoning_details"]
             return result
