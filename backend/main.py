@@ -97,6 +97,48 @@ class UpdateProviderRequest(BaseModel):
     description: Optional[str] = None
 
 
+# ── OpenAI-compatible models ─────────────────────────────────────────────────
+
+class OpenAIMessage(BaseModel):
+    role: str
+    content: str
+
+class OpenAIChatCompletionRequest(BaseModel):
+    model: str
+    messages: List[OpenAIMessage]
+    temperature: Optional[float] = None
+    max_tokens: Optional[int] = None
+    stream: bool = False
+
+class OpenAIChoice(BaseModel):
+    index: int
+    message: Dict[str, str]
+    finish_reason: str
+
+class OpenAIUsage(BaseModel):
+    prompt_tokens: int
+    completion_tokens: int
+    total_tokens: int
+
+class OpenAIChatCompletionResponse(BaseModel):
+    id: str
+    object: str = "chat.completion"
+    created: int
+    model: str
+    choices: List[OpenAIChoice]
+    usage: OpenAIUsage
+
+class OpenAIModel(BaseModel):
+    id: str
+    object: str = "model"
+    created: int
+    owned_by: str
+
+class OpenAIModelList(BaseModel):
+    object: str = "list"
+    data: List[OpenAIModel]
+
+
 # ── Health ────────────────────────────────────────────────────────────────────
 
 @app.get("/")
