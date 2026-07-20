@@ -439,7 +439,7 @@ async def openai_list_models():
     return OpenAIModelList(object="list", data=models)
 
 
-@app.post("/v1/chat/completions", response_model=OpenAIChatCompletionResponse)
+@app.post("/v1/chat/completions", response_model=OpenAIChatCompletionResponse, tags=["OpenAI Compatible"])
 async def openai_chat_completions(request: OpenAIChatCompletionRequest):
     """Create a chat completion using the LLM Council in OpenAI-compatible format."""
     import time
@@ -507,7 +507,7 @@ async def openai_chat_completions(request: OpenAIChatCompletionRequest):
 
 # ── File Uploads ────────────────────────────────────────────────────────────
 
-@app.post("/api/upload")
+@app.post("/api/upload", tags=["Files"])
 async def upload_file(file: UploadFile = File(...)):
     """Upload a file for chat attachment."""
     try:
@@ -519,19 +519,19 @@ async def upload_file(file: UploadFile = File(...)):
 
 # ── Conversations ─────────────────────────────────────────────────────────────
 
-@app.get("/api/conversations", response_model=List[ConversationMetadata])
+@app.get("/api/conversations", response_model=List[ConversationMetadata], tags=["Conversations"])
 async def list_conversations():
     return storage.list_conversations()
 
 
-@app.post("/api/conversations", response_model=Conversation)
+@app.post("/api/conversations", response_model=Conversation, tags=["Conversations"])
 async def create_conversation(request: CreateConversationRequest):
     conversation_id = str(uuid.uuid4())
     conversation = storage.create_conversation(conversation_id)
     return conversation
 
 
-@app.get("/api/conversations/{conversation_id}", response_model=Conversation)
+@app.get("/api/conversations/{conversation_id}", response_model=Conversation, tags=["Conversations"])
 async def get_conversation(conversation_id: str):
     conversation = storage.get_conversation(conversation_id)
     if conversation is None:
@@ -539,14 +539,14 @@ async def get_conversation(conversation_id: str):
     return conversation
 
 
-@app.delete("/api/conversations/{conversation_id}")
+@app.delete("/api/conversations/{conversation_id}", tags=["Conversations"])
 async def delete_conversation(conversation_id: str):
     if not storage.delete_conversation(conversation_id):
         raise HTTPException(status_code=404, detail="Conversation not found")
     return {"ok": True}
 
 
-@app.post("/api/conversations/{conversation_id}/message/stream")
+@app.post("/api/conversations/{conversation_id}/message/stream", tags=["Conversations"])
 async def send_message_stream(conversation_id: str, request: SendMessageRequest):
     conversation = storage.get_conversation(conversation_id)
     if conversation is None:
