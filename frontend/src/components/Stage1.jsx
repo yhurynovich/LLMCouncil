@@ -59,13 +59,8 @@ export default function Stage1({ responses }) {
               </div>
               {expandedError === activeTab && (
                 <div className="error-expandable">
-                  <p>This model did not return a response. Possible reasons:</p>
-                  <ul>
-                    <li>API key invalid or missing</li>
-                    <li>Model unavailable or rate limited</li>
-                    <li>Network timeout</li>
-                    <li>Invalid request format</li>
-                  </ul>
+                  <p>Full error message:</p>
+                  <pre className="error-trace">{responses[activeTab].error}</pre>
                 </div>
               )}
               <button

@@ -103,8 +103,8 @@ async def query_model(
             return result
 
         except Exception as e:
-            print(f"Error querying {model}: {e}")
-            return None
+            print(f"Error querying {model}: {e}", flush=True)
+            return {"error": str(e)}
 
 
 async def _staggered_query(model, messages, enable_search, delay):
