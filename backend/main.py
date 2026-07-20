@@ -432,6 +432,72 @@ async def openai_list_models():
     return OpenAIModelList(object="list", data=models)
 
 
+@app.post("/v1/chat/completions", response_model=OpenAIChatCompletionResponse)
+async def openai_chat_completions(request: OpenAIChatCompletionRequest):
+    """Create a chat completion using the LLM Council in OpenAI-compatible format."""
+    import time
+    import uuid
+
+    # Extract user message from messages list
+    user_message = ""
+    for msg in request.messages:
+        if msg.role == "user":
+            user_message = msg.content
+            break
+
+    if not user_message:
+        raise HTTPException(status_code=400, detail="No user message found")
+
+    # Resolve model set
+    set_id = request.model
+    if set_id.startswith("set/"):
+        set_id = set_id[4:]  # Remove "set/" prefix
+
+    if set_id not in cfg.MODEL_SETS:
+        set_id = cfg.ACTIVE_MODEL_SET
+
+    # Run the council
+    try:
+        model_set = cfg.MODEL_SETS[set_id]
+        council_models = model_set["council"]
+        chairman_model = model_set["chairman"]
+
+        stage1_results = await stage1_collect_responses(user_message, council_models)
+
+        if not stage1_results or all(r.get("response") is None for r in stage1_results):
+            final_response = "All models failed to respond. Please try again."
+        else:
+            responding_models = [r["model"] for r in stage1_results if r.get("response") is not None]
+            stage2_results, label_to_model = await stage2_collect_rankings(
+                user_message, stage1_results, responding_models
+            )
+            stage3_result = await stage3_synthesize_final(
+                user_message, stage1_results, stage2_results, chairman_model
+            )
+            final_response = stage3_result.get("response", "") if stage3_result else ""
+
+        return OpenAIChatCompletionResponse(
+            id=f"chatcmpl-{uuid.uuid4().hex[:12]}",
+            object="chat.completion",
+            created=int(time.time()),
+            model=request.model,
+            choices=[
+                OpenAIChoice(
+                    index=0,
+                    message={"role": "assistant", "content": final_response},
+                    finish_reason="stop",
+                )
+            ],
+            usage=OpenAIUsage(
+                prompt_tokens=0,
+                completion_tokens=0,
+                total_tokens=0,
+            ),
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 # ── File Uploads ────────────────────────────────────────────────────────────
 
 @app.post("/api/upload")
