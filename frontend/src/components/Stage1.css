@@ -92,3 +92,103 @@
   color: #333;
   line-height: 1.6;
 }
+
+/* Error state styles */
+.tab.error {
+  border-bottom: 2px solid #e74c3c;
+  color: #e74c3c;
+}
+
+.tab.error.active {
+  background-color: #fdf2f2;
+  border-bottom-color: #e74c3c;
+}
+
+.error-indicator {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  background-color: #e74c3c;
+  color: white;
+  border-radius: 50%;
+  font-size: 10px;
+  font-weight: bold;
+  margin-left: 6px;
+}
+
+.error-content {
+  padding: 16px;
+  background-color: #fdf2f2;
+  border-radius: 8px;
+  border: 1px solid #fecaca;
+}
+
+.model-name.error {
+  color: #e74c3c;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.error-badge {
+  display: inline-block;
+  padding: 2px 8px;
+  background-color: #e74c3c;
+  color: white;
+  border-radius: 4px;
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.error-details {
+  margin-top: 12px;
+}
+
+.error-message {
+  color: #991b1b;
+  font-weight: 500;
+}
+
+.error-expandable {
+  margin-top: 12px;
+  padding: 12px;
+  background-color: white;
+  border-radius: 6px;
+  border: 1px solid #fecaca;
+}
+
+.error-expandable p {
+  margin: 0 0 8px 0;
+  color: #666;
+  font-size: 14px;
+}
+
+.error-expandable ul {
+  margin: 0;
+  padding-left: 20px;
+  color: #666;
+  font-size: 14px;
+}
+
+.error-expandable li {
+  margin-bottom: 4px;
+}
+
+.error-toggle {
+  margin-top: 12px;
+  padding: 6px 12px;
+  background-color: white;
+  border: 1px solid #e74c3c;
+  color: #e74c3c;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 13px;
+  transition: all 0.2s;
+}
+
+.error-toggle:hover {
+  background-color: #e74c3c;
+  color: white;
+}

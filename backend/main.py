@@ -426,7 +426,18 @@ async def send_message_stream(conversation_id: str, request: SendMessageRequest)
                 # Stage 2
                 print(f"[STREAM] Stage 2 starting", flush=True)
                 yield f"data: {json.dumps({'type': 'stage2_start'})}\n\n"
-                responding_models = [r["model"] for r in stage1_results]
+                responding_models = [r["model"] for r in stage1_results if r.get("response") is not None]
+
+                # If all models failed, skip to error
+                if not responding_models:
+                    print(f"[STREAM] All models failed, skipping stages 2-3", flush=True)
+                    yield f"data: {json.dumps({'type': 'stage2_complete', 'data': [], 'metadata': {'label_to_model': {}, 'aggregate_rankings': {}}})}\n\n"
+                    yield f"data: {json.dumps({'type': 'stage3_start'})}\n\n"
+                    stage3_result = {"model": "error", "response": "All models failed to respond. Please try again."}
+                    yield f"data: {json.dumps({'type': 'stage3_complete', 'data': stage3_result})}\n\n"
+                    yield f"data: {json.dumps({'type': 'complete'})}\n\n"
+                    return
+
                 stage2_results, label_to_model = await stage2_collect_rankings(
                     request.content, stage1_results, responding_models
                 )
