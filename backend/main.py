@@ -454,6 +454,10 @@ async def openai_chat_completions(request: OpenAIChatCompletionRequest):
     import time
     import uuid
 
+    # Check for unsupported streaming
+    if request.stream:
+        raise HTTPException(status_code=400, detail="Streaming not yet supported. Use stream=false.")
+
     # Extract user message from messages list
     user_message = ""
     for msg in request.messages:
@@ -471,6 +475,10 @@ async def openai_chat_completions(request: OpenAIChatCompletionRequest):
 
     if set_id not in cfg.MODEL_SETS:
         set_id = cfg.ACTIVE_MODEL_SET
+
+    # Validate model set exists
+    if set_id not in cfg.MODEL_SETS:
+        raise HTTPException(status_code=400, detail=f"Unknown model: {request.model}")
 
     # Run the council
     try:
@@ -510,8 +518,11 @@ async def openai_chat_completions(request: OpenAIChatCompletionRequest):
                 total_tokens=0,
             ),
         )
+    except HTTPException:
+        raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        print(f"[OPENAI] Error: {e}\n{traceback.format_exc()}", flush=True)
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 
 # ── File Uploads ────────────────────────────────────────────────────────────
