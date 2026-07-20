@@ -229,8 +229,8 @@ Title:"""
     return title[:47] + "..." if len(title) > 50 else title
 
 
-async def run_full_council(user_query: str) -> Tuple[List, List, Dict, Dict]:
-    stage1_results = await stage1_collect_responses(user_query)
+async def run_full_council(user_query: str, council_models: Optional[List[str]] = None) -> Tuple[List, List, Dict, Dict]:
+    stage1_results = await stage1_collect_responses(user_query, council_models=council_models)
 
     if not stage1_results:
         return [], [], {

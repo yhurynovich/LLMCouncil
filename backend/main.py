@@ -24,7 +24,14 @@ from .council import (
     calculate_aggregate_rankings,
 )
 
-app = FastAPI(title="LLM Council API")
+app = FastAPI(
+    title="LLM Council API",
+    description="A multi-model LLM council system with OpenAI-compatible endpoints for Hermes integration.",
+    version="2.0.0",
+    docs_url="/docs",
+    redoc_url="/redoc",
+    openapi_url="/openapi.json",
+)
 
 app.add_middleware(
     CORSMiddleware,
@@ -106,6 +113,48 @@ class UpdateProviderRequest(BaseModel):
     description: Optional[str] = None
 
 
+# ── OpenAI-compatible models ─────────────────────────────────────────────────
+
+class OpenAIMessage(BaseModel):
+    role: str
+    content: str
+
+class OpenAIChatCompletionRequest(BaseModel):
+    model: str
+    messages: List[OpenAIMessage]
+    temperature: Optional[float] = None
+    max_tokens: Optional[int] = None
+    stream: bool = False
+
+class OpenAIChoice(BaseModel):
+    index: int
+    message: Dict[str, str]
+    finish_reason: str
+
+class OpenAIUsage(BaseModel):
+    prompt_tokens: int
+    completion_tokens: int
+    total_tokens: int
+
+class OpenAIChatCompletionResponse(BaseModel):
+    id: str
+    object: str = "chat.completion"
+    created: int
+    model: str
+    choices: List[OpenAIChoice]
+    usage: OpenAIUsage
+
+class OpenAIModel(BaseModel):
+    id: str
+    object: str = "model"
+    created: int
+    owned_by: str
+
+class OpenAIModelList(BaseModel):
+    object: str = "list"
+    data: List[OpenAIModel]
+
+
 # ── Health ────────────────────────────────────────────────────────────────────
 
 @app.get("/")
@@ -115,7 +164,7 @@ async def root():
 
 # ── Model Sets ────────────────────────────────────────────────────────────────
 
-@app.get("/api/model-sets")
+@app.get("/api/model-sets", tags=["Model Sets"])
 async def list_model_sets():
     """Return all model sets and the currently active one."""
     sets = {}
@@ -130,7 +179,7 @@ async def list_model_sets():
     return {"sets": sets, "active": cfg.ACTIVE_MODEL_SET}
 
 
-@app.post("/api/model-sets/active")
+@app.post("/api/model-sets/active", tags=["Model Sets"])
 async def set_active_model_set(request: SetModelSetRequest):
     """Switch the active model set."""
     if request.set_id not in cfg.MODEL_SETS:
@@ -146,7 +195,7 @@ async def set_active_model_set(request: SetModelSetRequest):
     }
 
 
-@app.post("/api/model-sets")
+@app.post("/api/model-sets", tags=["Model Sets"])
 async def create_model_set(request: CreateModelSetRequest):
     """Create a new model set."""
     set_id = request.set_id.strip().lower().replace(" ", "-")
@@ -166,7 +215,7 @@ async def create_model_set(request: CreateModelSetRequest):
     return {"ok": True, "set_id": set_id}
 
 
-@app.put("/api/model-sets/{set_id}")
+@app.put("/api/model-sets/{set_id}", tags=["Model Sets"])
 async def update_model_set(set_id: str, request: UpdateModelSetRequest):
     """Update an existing model set."""
     if set_id not in cfg.MODEL_SETS:
@@ -188,7 +237,7 @@ async def update_model_set(set_id: str, request: UpdateModelSetRequest):
     return {"ok": True, "set_id": set_id}
 
 
-@app.delete("/api/model-sets/{set_id}")
+@app.delete("/api/model-sets/{set_id}", tags=["Model Sets"])
 async def delete_model_set(set_id: str):
     """Delete a model set. Built-in sets cannot be deleted."""
     if set_id not in cfg.MODEL_SETS:
@@ -205,13 +254,13 @@ async def delete_model_set(set_id: str):
 
 # ── Providers ──────────────────────────────────────────────────────────────
 
-@app.get("/api/providers")
+@app.get("/api/providers", tags=["Providers"])
 async def list_providers():
     """Return all configured providers."""
     return {"providers": prov.list_providers()}
 
 
-@app.post("/api/providers")
+@app.post("/api/providers", tags=["Providers"])
 async def create_provider(request: CreateProviderRequest):
     """Add a new provider."""
     name = request.name.strip().lower().replace(" ", "-")
@@ -231,7 +280,7 @@ async def create_provider(request: CreateProviderRequest):
     return {"ok": True, "name": name}
 
 
-@app.put("/api/providers/{name}")
+@app.put("/api/providers/{name}", tags=["Providers"])
 async def update_provider(name: str, request: UpdateProviderRequest):
     """Update an existing provider."""
     if name not in prov.PROVIDERS:
@@ -253,7 +302,7 @@ async def update_provider(name: str, request: UpdateProviderRequest):
     return {"ok": True, "name": name}
 
 
-@app.delete("/api/providers/{name}")
+@app.delete("/api/providers/{name}", tags=["Providers"])
 async def delete_provider(name: str):
     """Delete a provider. Cannot delete 'openrouter'."""
     if name not in prov.PROVIDERS:
@@ -266,7 +315,7 @@ async def delete_provider(name: str):
     return {"ok": True}
 
 
-@app.get("/api/available-models")
+@app.get("/api/available-models", tags=["Models"])
 async def list_available_models():
     """Fetch available models from all providers."""
     all_models = []
@@ -342,9 +391,132 @@ async def list_available_models():
     return {"models": all_models}
 
 
+# ── OpenAI-compatible endpoints ──────────────────────────────────────────────
+
+@app.get("/v1/models", response_model=OpenAIModelList, tags=["OpenAI Compatible"])
+async def openai_list_models():
+    """List available models in OpenAI-compatible format."""
+    import time
+    
+    models = []
+    current_time = int(time.time())
+    
+    # Add model sets as models
+    for set_id, ms in cfg.MODEL_SETS.items():
+        models.append(OpenAIModel(
+            id=f"set/{set_id}",
+            object="model",
+            created=current_time,
+            owned_by="llm-council"
+        ))
+    
+    # Add individual models from providers
+    for provider_name, provider in prov.PROVIDERS.items():
+        api_key = prov.get_provider_api_key(provider)
+        if not api_key and provider_name != "openrouter":
+            continue
+        
+        try:
+            base = provider["base_url"]
+            if base.endswith("/chat/completions"):
+                models_url = base.replace("/chat/completions", "/models")
+            elif base.endswith("/v1/chat/completions"):
+                models_url = base.replace("/v1/chat/completions", "/v1/models")
+            else:
+                models_url = base.rstrip("/") + "/models"
+
+            headers = {}
+            if api_key:
+                headers["Authorization"] = f"Bearer {api_key}"
+
+            async with httpx.AsyncClient(timeout=30) as client:
+                resp = await client.get(models_url, headers=headers)
+                if resp.status_code == 200:
+                    data = resp.json()
+                    for m in data.get("data", []):
+                        model_id = m.get("id", "")
+                        if model_id:
+                            models.append(OpenAIModel(
+                                id=f"{provider_name}/{model_id}",
+                                object="model",
+                                created=current_time,
+                                owned_by=provider_name
+                            ))
+        except Exception as e:
+            print(f"Error fetching models from {provider_name}: {e}")
+    
+    return OpenAIModelList(object="list", data=models)
+
+
+@app.post("/v1/chat/completions", response_model=OpenAIChatCompletionResponse, tags=["OpenAI Compatible"])
+async def openai_chat_completions(request: OpenAIChatCompletionRequest):
+    """Create a chat completion using the LLM Council in OpenAI-compatible format."""
+    import time
+    import uuid
+
+    # Extract user message from messages list
+    user_message = ""
+    for msg in request.messages:
+        if msg.role == "user":
+            user_message = msg.content
+            break
+
+    if not user_message:
+        raise HTTPException(status_code=400, detail="No user message found")
+
+    # Resolve model set
+    set_id = request.model
+    if set_id.startswith("set/"):
+        set_id = set_id[4:]  # Remove "set/" prefix
+
+    if set_id not in cfg.MODEL_SETS:
+        set_id = cfg.ACTIVE_MODEL_SET
+
+    # Run the council
+    try:
+        model_set = cfg.MODEL_SETS[set_id]
+        council_models = model_set["council"]
+        chairman_model = model_set["chairman"]
+
+        stage1_results = await stage1_collect_responses(user_message, council_models)
+
+        if not stage1_results or all(r.get("response") is None for r in stage1_results):
+            final_response = "All models failed to respond. Please try again."
+        else:
+            responding_models = [r["model"] for r in stage1_results if r.get("response") is not None]
+            stage2_results, label_to_model = await stage2_collect_rankings(
+                user_message, stage1_results, responding_models
+            )
+            stage3_result = await stage3_synthesize_final(
+                user_message, stage1_results, stage2_results, chairman_model
+            )
+            final_response = stage3_result.get("response", "") if stage3_result else ""
+
+        return OpenAIChatCompletionResponse(
+            id=f"chatcmpl-{uuid.uuid4().hex[:12]}",
+            object="chat.completion",
+            created=int(time.time()),
+            model=request.model,
+            choices=[
+                OpenAIChoice(
+                    index=0,
+                    message={"role": "assistant", "content": final_response},
+                    finish_reason="stop",
+                )
+            ],
+            usage=OpenAIUsage(
+                prompt_tokens=0,
+                completion_tokens=0,
+                total_tokens=0,
+            ),
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 # ── File Uploads ────────────────────────────────────────────────────────────
 
-@app.post("/api/upload")
+@app.post("/api/upload", tags=["Files"])
 async def upload_file(file: UploadFile = File(...)):
     """Upload a file for chat attachment."""
     try:
@@ -356,19 +528,19 @@ async def upload_file(file: UploadFile = File(...)):
 
 # ── Conversations ─────────────────────────────────────────────────────────────
 
-@app.get("/api/conversations", response_model=List[ConversationMetadata])
+@app.get("/api/conversations", response_model=List[ConversationMetadata], tags=["Conversations"])
 async def list_conversations():
     return storage.list_conversations()
 
 
-@app.post("/api/conversations", response_model=Conversation)
+@app.post("/api/conversations", response_model=Conversation, tags=["Conversations"])
 async def create_conversation(request: CreateConversationRequest):
     conversation_id = str(uuid.uuid4())
     conversation = storage.create_conversation(conversation_id)
     return conversation
 
 
-@app.get("/api/conversations/{conversation_id}", response_model=Conversation)
+@app.get("/api/conversations/{conversation_id}", response_model=Conversation, tags=["Conversations"])
 async def get_conversation(conversation_id: str):
     conversation = storage.get_conversation(conversation_id)
     if conversation is None:
@@ -376,14 +548,14 @@ async def get_conversation(conversation_id: str):
     return conversation
 
 
-@app.delete("/api/conversations/{conversation_id}")
+@app.delete("/api/conversations/{conversation_id}", tags=["Conversations"])
 async def delete_conversation(conversation_id: str):
     if not storage.delete_conversation(conversation_id):
         raise HTTPException(status_code=404, detail="Conversation not found")
     return {"ok": True}
 
 
-@app.post("/api/conversations/{conversation_id}/message/stream")
+@app.post("/api/conversations/{conversation_id}/message/stream", tags=["Conversations"])
 async def send_message_stream(conversation_id: str, request: SendMessageRequest):
     conversation = storage.get_conversation(conversation_id)
     if conversation is None:
