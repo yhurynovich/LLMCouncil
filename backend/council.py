@@ -47,6 +47,12 @@ async def stage1_collect_responses(
                 "response": response.get('content', ''),
                 "response_time": response.get('response_time'),
             })
+        else:
+            stage1_results.append({
+                "model": model,
+                "response": None,
+                "error": "Model failed to respond",
+            })
     return stage1_results
 
 
