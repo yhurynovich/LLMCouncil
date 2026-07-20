@@ -375,6 +375,63 @@ async def list_available_models():
     return {"models": all_models}
 
 
+# ── OpenAI-compatible endpoints ──────────────────────────────────────────────
+
+@app.get("/v1/models", response_model=OpenAIModelList)
+async def openai_list_models():
+    """List available models in OpenAI-compatible format."""
+    import time
+    
+    models = []
+    current_time = int(time.time())
+    
+    # Add model sets as models
+    for set_id, ms in cfg.MODEL_SETS.items():
+        models.append(OpenAIModel(
+            id=f"set/{set_id}",
+            object="model",
+            created=current_time,
+            owned_by="llm-council"
+        ))
+    
+    # Add individual models from providers
+    for provider_name, provider in prov.PROVIDERS.items():
+        api_key = prov.get_provider_api_key(provider)
+        if not api_key and provider_name != "openrouter":
+            continue
+        
+        try:
+            base = provider["base_url"]
+            if base.endswith("/chat/completions"):
+                models_url = base.replace("/chat/completions", "/models")
+            elif base.endswith("/v1/chat/completions"):
+                models_url = base.replace("/v1/chat/completions", "/v1/models")
+            else:
+                models_url = base.rstrip("/") + "/models"
+
+            headers = {}
+            if api_key:
+                headers["Authorization"] = f"Bearer {api_key}"
+
+            async with httpx.AsyncClient(timeout=30) as client:
+                resp = await client.get(models_url, headers=headers)
+                if resp.status_code == 200:
+                    data = resp.json()
+                    for m in data.get("data", []):
+                        model_id = m.get("id", "")
+                        if model_id:
+                            models.append(OpenAIModel(
+                                id=f"{provider_name}/{model_id}",
+                                object="model",
+                                created=current_time,
+                                owned_by=provider_name
+                            ))
+        except Exception as e:
+            print(f"Error fetching models from {provider_name}: {e}")
+    
+    return OpenAIModelList(object="list", data=models)
+
+
 # ── File Uploads ────────────────────────────────────────────────────────────
 
 @app.post("/api/upload")
