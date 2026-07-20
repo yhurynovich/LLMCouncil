@@ -32,6 +32,8 @@ export default function Stage1({ responses }) {
               setActiveTab(index);
               if (resp.error) {
                 handleErrorClick(index);
+              } else {
+                setExpandedError(null);
               }
             }}
           >
