@@ -81,6 +81,15 @@ class Conversation(BaseModel):
     title: str
     messages: List[Dict[str, Any]]
 
+class OpenAIChatMessage(BaseModel):
+    role: str
+    content: str
+
+class OpenAIChatCompletionsRequest(BaseModel):
+    model: str
+    messages: List[OpenAIChatMessage]
+    stream: bool = False
+
 class CreateProviderRequest(BaseModel):
     name: str
     base_url: str
@@ -467,6 +476,69 @@ async def send_message_stream(conversation_id: str, request: SendMessageRequest)
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "Connection": "keep-alive"},
     )
+
+
+# ── OpenAI-compatible endpoint (for Hermes / other OpenAI-style clients) ──────
+
+@app.post("/v1/chat/completions")
+async def openai_compat_chat_completions(request: OpenAIChatCompletionsRequest):
+    """
+    OpenAI-compatible shim so external tools (e.g. Hermes Agent) can call
+    a council as a single 'model'. Runs the full 3-stage council (all
+    members respond, then rank each other, then the chairman synthesizes)
+    and returns the chairman's final answer as a normal chat completion.
+
+    request.model selects which model set to use:
+      "council"            -> the active model set (currently "search")
+      "council-<set_id>"   -> e.g. "council-search", "council-smart"
+      "<set_id>"           -> also accepted directly, e.g. "search"
+      anything else        -> falls back to the active model set
+    """
+    user_messages = [m.content for m in request.messages if m.role == "user"]
+    if not user_messages:
+        raise HTTPException(status_code=400, detail="No user message found")
+    content = user_messages[-1]
+
+    set_id = cfg.ACTIVE_MODEL_SET
+    requested = (request.model or "").strip()
+    if requested.startswith("council-"):
+        candidate = requested[len("council-"):]
+        if candidate in cfg.MODEL_SETS:
+            set_id = candidate
+    elif requested in cfg.MODEL_SETS:
+        set_id = requested
+
+    model_set = cfg.MODEL_SETS[set_id]
+    council_models = model_set["council"]
+    chairman_model = model_set["chairman"]
+
+    try:
+        print(f"[V1] Council run starting — set={set_id}, models={council_models}", flush=True)
+        stage1_results = await stage1_collect_responses(content, council_models, files=[])
+        responding_models = [r["model"] for r in stage1_results]
+        stage2_results, label_to_model = await stage2_collect_rankings(
+            content, stage1_results, responding_models
+        )
+        stage3_result = await stage3_synthesize_final(
+            content, stage1_results, stage2_results, chairman_model
+        )
+        print(f"[V1] Council run complete — set={set_id}", flush=True)
+    except Exception as e:
+        full_traceback = traceback.format_exc()
+        print(f"[V1] ERROR: {e}\n{full_traceback}", flush=True)
+        raise HTTPException(status_code=500, detail=f"Council run failed: {e}")
+
+    final_text = stage3_result.get("response", "")
+
+    return {
+        "id": f"chatcmpl-council-{uuid.uuid4().hex[:12]}",
+        "object": "chat.completion",
+        "model": request.model,
+        "choices": [
+            {"index": 0, "message": {"role": "assistant", "content": final_text}, "finish_reason": "stop"}
+        ],
+        "usage": {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0},
+    }
 
 
 if __name__ == "__main__":
