@@ -61,16 +61,19 @@ async def stage2_collect_rankings(
     stage1_results: List[Dict[str, Any]],
     council_models: Optional[List[str]] = None,
 ) -> Tuple[List[Dict[str, Any]], Dict[str, str]]:
-    labels = [chr(65 + i) for i in range(len(stage1_results))]
+    # Filter out failed models (those with response=None)
+    successful_results = [r for r in stage1_results if r.get('response') is not None]
+
+    labels = [chr(65 + i) for i in range(len(successful_results))]
 
     label_to_model = {
         f"Response {label}": result['model']
-        for label, result in zip(labels, stage1_results)
+        for label, result in zip(labels, successful_results)
     }
 
     responses_text = "\n\n".join([
         f"Response {label}:\n{result['response']}"
-        for label, result in zip(labels, stage1_results)
+        for label, result in zip(labels, successful_results)
     ])
 
     ranking_prompt = f"""You are evaluating different responses to the following question:
@@ -130,9 +133,12 @@ async def stage3_synthesize_final(
 ) -> Dict[str, Any]:
     chair = chairman_model if chairman_model is not None else CHAIRMAN_MODEL
 
+    # Filter out failed models (those with response=None)
+    successful_results = [r for r in stage1_results if r.get('response') is not None]
+
     stage1_text = "\n\n".join([
         f"Model: {result['model']}\nResponse: {result['response']}"
-        for result in stage1_results
+        for result in successful_results
     ])
     stage2_text = "\n\n".join([
         f"Model: {result['model']}\nRanking: {result['ranking']}"
@@ -232,7 +238,7 @@ async def run_full_council(user_query: str) -> Tuple[List, List, Dict, Dict]:
             "response": "All models failed to respond. Please try again."
         }, {}
 
-    responding_models = [r["model"] for r in stage1_results]
+    responding_models = [r["model"] for r in stage1_results if r.get("response") is not None]
     stage2_results, label_to_model = await stage2_collect_rankings(user_query, stage1_results, responding_models)
     aggregate_rankings = calculate_aggregate_rankings(stage2_results, label_to_model)
     stage3_result = await stage3_synthesize_final(user_query, stage1_results, stage2_results)
