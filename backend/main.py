@@ -15,6 +15,7 @@ from . import storage
 from . import config as cfg
 from . import providers as prov
 from . import uploads
+from .llm_client import _get_proxy_url
 from .council import (
     run_full_council,
     generate_conversation_title,
@@ -339,7 +340,7 @@ async def list_available_models():
             if api_key:
                 headers["Authorization"] = f"Bearer {api_key}"
 
-            async with httpx.AsyncClient(timeout=30) as client:
+            async with httpx.AsyncClient(timeout=30, proxy=_get_proxy_url(), trust_env=False) as client:
                 resp = await client.get(models_url, headers=headers)
                 if resp.status_code == 200:
                     data = resp.json()
@@ -429,7 +430,7 @@ async def openai_list_models():
             if api_key:
                 headers["Authorization"] = f"Bearer {api_key}"
 
-            async with httpx.AsyncClient(timeout=30) as client:
+            async with httpx.AsyncClient(timeout=30, proxy=_get_proxy_url(), trust_env=False) as client:
                 resp = await client.get(models_url, headers=headers)
                 if resp.status_code == 200:
                     data = resp.json()
@@ -448,15 +449,18 @@ async def openai_list_models():
     return OpenAIModelList(object="list", data=models)
 
 
-@app.post("/v1/chat/completions", response_model=OpenAIChatCompletionResponse, tags=["OpenAI Compatible"])
+@app.post("/v1/chat/completions", tags=["OpenAI Compatible"])
 async def openai_chat_completions(request: OpenAIChatCompletionRequest):
-    """Create a chat completion using the LLM Council in OpenAI-compatible format."""
+    """Create a chat completion using the LLM Council in OpenAI-compatible format.
+
+    Supports both stream=false (single JSON response) and stream=true
+    (SSE). The council itself has no token-level streaming — the whole
+    answer is sent as one delta chunk once the full 3-stage run finishes —
+    but this satisfies OpenAI-compatible clients (like Hermes) that always
+    request stream=true regardless of what a provider config says.
+    """
     import time
     import uuid
-
-    # Check for unsupported streaming
-    if request.stream:
-        raise HTTPException(status_code=400, detail="Streaming not yet supported. Use stream=false.")
 
     # Extract user message from messages list
     user_message = ""
@@ -480,49 +484,78 @@ async def openai_chat_completions(request: OpenAIChatCompletionRequest):
     if set_id not in cfg.MODEL_SETS:
         raise HTTPException(status_code=400, detail=f"Unknown model: {request.model}")
 
-    # Run the council
-    try:
-        model_set = cfg.MODEL_SETS[set_id]
-        council_models = model_set["council"]
-        chairman_model = model_set["chairman"]
+    model_set = cfg.MODEL_SETS[set_id]
+    council_models = model_set["council"]
+    chairman_model = model_set["chairman"]
 
+    async def run_council() -> str:
         stage1_results = await stage1_collect_responses(user_message, council_models)
 
         if not stage1_results or all(r.get("response") is None for r in stage1_results):
-            final_response = "All models failed to respond. Please try again."
-        else:
-            responding_models = [r["model"] for r in stage1_results if r.get("response") is not None]
-            stage2_results, label_to_model = await stage2_collect_rankings(
-                user_message, stage1_results, responding_models
-            )
-            stage3_result = await stage3_synthesize_final(
-                user_message, stage1_results, stage2_results, chairman_model
-            )
-            final_response = stage3_result.get("response", "") if stage3_result else ""
+            return "All models failed to respond. Please try again."
 
-        return OpenAIChatCompletionResponse(
-            id=f"chatcmpl-{uuid.uuid4().hex[:12]}",
-            object="chat.completion",
-            created=int(time.time()),
-            model=request.model,
-            choices=[
-                OpenAIChoice(
-                    index=0,
-                    message={"role": "assistant", "content": final_response},
-                    finish_reason="stop",
-                )
-            ],
-            usage=OpenAIUsage(
-                prompt_tokens=0,
-                completion_tokens=0,
-                total_tokens=0,
-            ),
+        responding_models = [r["model"] for r in stage1_results if r.get("response") is not None]
+        stage2_results, label_to_model = await stage2_collect_rankings(
+            user_message, stage1_results, responding_models
         )
+        stage3_result = await stage3_synthesize_final(
+            user_message, stage1_results, stage2_results, chairman_model
+        )
+        return stage3_result.get("response", "") if stage3_result else ""
+
+    completion_id = f"chatcmpl-{uuid.uuid4().hex[:12]}"
+    created = int(time.time())
+
+    if request.stream:
+        async def event_stream():
+            try:
+                final_response = await run_council()
+            except Exception as e:
+                print(f"[OPENAI] Error: {e}\n{traceback.format_exc()}", flush=True)
+                final_response = f"Error: council run failed ({e})"
+
+            content_chunk = {
+                "id": completion_id,
+                "object": "chat.completion.chunk",
+                "created": created,
+                "model": request.model,
+                "choices": [
+                    {"index": 0, "delta": {"role": "assistant", "content": final_response}, "finish_reason": None}
+                ],
+            }
+            yield f"data: {json.dumps(content_chunk)}\n\n"
+
+            stop_chunk = {
+                "id": completion_id,
+                "object": "chat.completion.chunk",
+                "created": created,
+                "model": request.model,
+                "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}],
+            }
+            yield f"data: {json.dumps(stop_chunk)}\n\n"
+            yield "data: [DONE]\n\n"
+
+        return StreamingResponse(event_stream(), media_type="text/event-stream")
+
+    # Non-streaming path
+    try:
+        final_response = await run_council()
     except HTTPException:
         raise
     except Exception as e:
         print(f"[OPENAI] Error: {e}\n{traceback.format_exc()}", flush=True)
         raise HTTPException(status_code=500, detail="Internal server error")
+
+    return {
+        "id": completion_id,
+        "object": "chat.completion",
+        "created": created,
+        "model": request.model,
+        "choices": [
+            {"index": 0, "message": {"role": "assistant", "content": final_response}, "finish_reason": "stop"}
+        ],
+        "usage": {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0},
+    }
 
 
 # ── File Uploads ────────────────────────────────────────────────────────────
