@@ -4,23 +4,65 @@ Forked from https://github.com/karpathy/llm-council.git
 
 ![llmcouncil](header.jpg)
 
-The idea of this repo is that instead of asking a question to your favorite LLM provider (e.g. OpenAI GPT 5.1, Google Gemini 3.0 Pro, Anthropic Claude Sonnet 4.5, xAI Grok 4, eg.c), you can group them into your "LLM Council". This repo is a simple, local web app that essentially looks like ChatGPT except it uses OpenRouter to send your query to multiple LLMs, it then asks them to review and rank each other's work, and finally a Chairman LLM produces the final response.
+A multi-model LLM council system where multiple AI models collaboratively answer your questions through 3-stage deliberation: individual responses, anonymized peer review, and chairman synthesis.
 
-In a bit more detail, here is what happens when you submit a query:
+## What It Does
 
-1. **Stage 1: First opinions**. The user query is given to all LLMs individually, and the responses are collected. The individual responses are shown in a "tab view", so that the user can inspect them all one by one.
-2. **Stage 2: Review**. Each individual LLM is given the responses of the other LLMs. Under the hood, the LLM identities are anonymized so that the LLM can't play favorites when judging their outputs. The LLM is asked to rank them in accuracy and insight.
-3. **Stage 3: Final response**. The designated Chairman of the LLM Council takes all of the model's responses and compiles them into a single final answer that is presented to the user.
+When you submit a query:
 
-## Vibe Code Alert
+1. **Stage 1: First opinions** — Your query goes to all council models in parallel. Responses are shown in a tabbed view for inspection.
+2. **Stage 2: Peer review** — Each model evaluates the others' responses. Identities are anonymized ("Response A, B, C...") to prevent bias. Models rank responses by accuracy and insight.
+3. **Stage 3: Chairman synthesis** — A designated Chairman model compiles all responses and rankings into a single, comprehensive answer.
 
-This project was 99% vibe coded as a fun Saturday hack because I wanted to explore and evaluate a number of LLMs side by side in the process of [reading books together with LLMs](https://x.com/karpathy/status/1990577951671509438). It's nice and useful to see multiple responses side by side, and also the cross-opinions of all LLMs on each other's outputs. I'm not going to support it in any way, it's provided here as is for other people's inspiration and I don't intend to improve it. Code is ephemeral now and libraries are over, ask your LLM to change it in whatever way you like.
+## New Features (vs. Original)
+
+### Multi-Provider Support
+- **Not just OpenRouter** — connect to any OpenAI-compatible API (local or remote)
+- Built-in support for local model deployments (Qwen, DeepSeek, GLM/Kimi)
+- Provider CRUD via API and UI
+
+### Model Set Management
+- **Configurable model sets** — group models into named sets (e.g., "Free Tier", "Smartest", "Internet Search")
+- Create, edit, and delete custom model sets
+- Switch active model set on the fly
+- Built-in presets + unlimited custom sets
+
+### OpenAI-Compatible API
+- **`GET /v1/models`** — list available models in OpenAI format
+- **`POST /v1/chat/completions`** — run the full council via OpenAI-compatible endpoint
+- Works with Hermes Agent, OpenWebUI, and other OpenAI-compatible clients
+- Supports both streaming (`stream=true`) and non-streaming responses
+
+### Streaming Support
+- **SSE streaming** in both the web UI and OpenAI-compatible endpoints
+- Real-time stage progress updates (Stage 1 → 2 → 3)
+- Stop button to interrupt responses
+
+### File Attachments
+- Upload and attach files (text, images) to chat messages
+- Files are prepended to the query context for all models
+
+### Enhanced Error Handling
+- **Real error messages** — when a model fails, see the actual error (HTTP status, timeout, etc.) instead of generic messages
+- Error details panel with expandable trace
+- Graceful degradation — continue with successful responses if some models fail
+
+### UI Improvements
+- **Response time display** — see how fast each model responded
+- **Quick mode** — skip Stage 2 & 3 for faster single-stage answers
+- **Aggregate rankings** — average rank position across all peer evaluations
+- **De-anonymized display** — model names shown alongside anonymous labels for readability
+- Conversation management (create, delete, list)
+
+### Infrastructure
+- **Port configuration** — backend port configurable via `.env` (`VITE_BACKEND_PORT`)
+- **SOCKS/HTTP proxy support** — works behind corporate proxies
+- **OpenAPI documentation** — full API docs at `/docs`
+- **JSON storage** — conversations persisted in `data/conversations/`
 
 ## Setup
 
 ### 1. Install Dependencies
-
-The project uses [uv](https://docs.astral.sh/uv/) for project management.
 
 **Backend:**
 ```bash
@@ -31,42 +73,52 @@ uv sync
 ```bash
 cd frontend
 npm install
-cd ..
 ```
 
-### 2. Configure API Key
+### 2. Configure Environment
 
-Create a `.env` file in the project root:
+Create `.env` in the project root:
 
 ```bash
+# Required — get your key at https://openrouter.ai
 OPENROUTER_API_KEY=sk-or-v1-...
+
+# Optional — backend port (default: 8001)
+VITE_BACKEND_PORT=8001
 ```
 
-Get your API key at [openrouter.ai](https://openrouter.ai/). Make sure to purchase the credits you need, or sign up for automatic top up.
+### 3. Configure Providers (Optional)
 
-### 3. Configure Models (Optional)
+For custom/local providers, edit `data/providers.json`:
 
-Edit `backend/config.py` to customize the council:
-
-```python
-COUNCIL_MODELS = [
-    "openai/gpt-5.1",
-    "google/gemini-3-pro-preview",
-    "anthropic/claude-sonnet-4.5",
-    "x-ai/grok-4",
-]
-
-CHAIRMAN_MODEL = "google/gemini-3-pro-preview"
+```json
+{
+  "openrouter": {
+    "base_url": "https://openrouter.ai/api/v1/chat/completions",
+    "api_key_env": "OPENROUTER_API_KEY"
+  },
+  "my-local-model": {
+    "base_url": "http://localhost:8080/v1/chat/completions",
+    "api_key": "dummy-key",
+    "model": "my-model-name"
+  }
+}
 ```
+
+### 4. Configure Model Sets (Optional)
+
+Model sets are managed via the UI or `data/model-sets.json`. Each set defines:
+- `council` — list of model IDs for Stage 1 & 2
+- `chairman` — model ID for Stage 3 synthesis
 
 ## Running the Application
 
-**Option 1: Use the start script**
+**Option 1: Start script**
 ```bash
 ./start.sh
 ```
 
-**Option 2: Run manually**
+**Option 2: Manual**
 
 Terminal 1 (Backend):
 ```bash
@@ -79,11 +131,36 @@ cd frontend
 npm run dev
 ```
 
-Then open http://localhost:5173 in your browser.
+Open http://localhost:5173 in your browser.
+
+## API Endpoints
+
+### Web API
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/api/model-sets` | List all model sets |
+| POST | `/api/model-sets` | Create a model set |
+| PUT | `/api/model-sets/{id}` | Update a model set |
+| DELETE | `/api/model-sets/{id}` | Delete a model set |
+| POST | `/api/model-sets/active` | Switch active model set |
+| GET | `/api/providers` | List all providers |
+| POST | `/api/providers` | Add a provider |
+| GET | `/api/available-models` | List all available models |
+| POST | `/api/upload` | Upload a file |
+| GET | `/api/conversations` | List conversations |
+| POST | `/api/conversations` | Create a conversation |
+| POST | `/api/conversations/{id}/message/stream` | Send message (SSE) |
+
+### OpenAI-Compatible API
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/v1/models` | List models (OpenAI format) |
+| POST | `/v1/chat/completions` | Chat completion (supports `stream=true`) |
 
 ## Tech Stack
 
-- **Backend:** FastAPI (Python 3.10+), async httpx, OpenRouter API
-- **Frontend:** React + Vite, react-markdown for rendering
+- **Backend:** FastAPI (Python 3.10+), async httpx, multi-provider LLM routing
+- **Frontend:** React + Vite, react-markdown
 - **Storage:** JSON files in `data/conversations/`
-- **Package Management:** uv for Python, npm for JavaScript
+- **APIs:** OpenRouter, OpenAI-compatible endpoints
+- **Package Management:** uv (Python), npm (JavaScript)

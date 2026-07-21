@@ -1,6 +1,7 @@
 """Generic LLM client — routes queries to the correct provider."""
 import asyncio
 import json
+import os
 import time
 import httpx
 from typing import Any
@@ -9,6 +10,16 @@ from .providers import get_provider, get_provider_api_key
 from .web_search import SEARCH_TOOL, handle_tool_call
 
 STAGGER_DELAY = 0.5
+
+
+def _get_proxy_url() -> str | None:
+    """Resolve proxy URL from env, preferring HTTP/HTTPS proxy over unsupported schemes."""
+    # Prefer protocol-specific proxies (httpx handles these natively)
+    for var in ("HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy"):
+        val = os.environ.get(var)
+        if val:
+            return val
+    return None
 
 
 def _parse_model_id(model: str) -> tuple[str, str]:
@@ -46,8 +57,10 @@ async def query_model(
         headers["HTTP-Referer"] = "https://llm-council.local"
         headers["X-Title"] = "LLM Council"
 
+    # Use the provider's configured model name if available, otherwise use the parsed model_id
+    api_model = provider.get("model", model_id)
     payload: dict[str, Any] = {
-        "model": model_id,
+        "model": api_model,
         "messages": messages,
     }
 
@@ -56,7 +69,8 @@ async def query_model(
         payload["tools"] = [SEARCH_TOOL]
         payload["tool_choice"] = "auto"
 
-    async with httpx.AsyncClient(timeout=120.0) as client:
+    proxy = _get_proxy_url()
+    async with httpx.AsyncClient(timeout=120.0, proxy=proxy, trust_env=False) as client:
         try:
             t0 = time.monotonic()
             resp = await client.post(base_url, headers=headers, json=payload)
@@ -85,14 +99,18 @@ async def query_model(
                 msg = resp2.json()["choices"][0]["message"]
 
             elapsed = round(time.monotonic() - t0, 2)
-            result: dict[str, Any] = {"content": msg.get("content", ""), "response_time": elapsed}
+            content = msg.get("content") or ""
+            if not content.strip():
+                print(f"Error querying {model}: empty response content", flush=True)
+                return {"error": "Model returned empty response"}
+            result: dict[str, Any] = {"content": content, "response_time": elapsed}
             if "reasoning_details" in msg:
                 result["reasoning_details"] = msg["reasoning_details"]
             return result
 
         except Exception as e:
-            print(f"Error querying {model}: {e}")
-            return None
+            print(f"Error querying {model}: {e}", flush=True)
+            return {"error": str(e)}
 
 
 async def _staggered_query(model, messages, enable_search, delay):

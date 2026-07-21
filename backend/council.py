@@ -41,17 +41,18 @@ async def stage1_collect_responses(
 
     stage1_results = []
     for model, response in responses.items():
-        if response is not None:
+        if response is not None and "error" not in response:
             stage1_results.append({
                 "model": model,
                 "response": response.get('content', ''),
                 "response_time": response.get('response_time'),
             })
         else:
+            error_msg = response.get("error", "Model failed to respond") if response else "Model failed to respond"
             stage1_results.append({
                 "model": model,
                 "response": None,
-                "error": "Model failed to respond",
+                "error": error_msg,
             })
     return stage1_results
 
