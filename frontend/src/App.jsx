@@ -120,7 +120,8 @@ function App() {
             case 'model_set':
               setCurrentConversation((prev) => {
                 const messages = [...prev.messages];
-                messages[messages.length - 1].modelSetInfo = event.data;
+                const lastMsg = messages[messages.length - 1];
+                messages[messages.length - 1] = { ...lastMsg, modelSetInfo: event.data };
                 return { ...prev, messages };
               });
               break;
@@ -174,7 +175,7 @@ function App() {
               setCurrentConversation((prev) => {
                 const messages = [...prev.messages];
                 const lastMsg = messages[messages.length - 1];
-                messages[messages.length - 1] = { ...lastMsg, stage3: event.data, loading: { ...lastMsg.loading, stage3: false } };
+                messages[messages.length - 1] = { ...lastMsg, stage3: event.data, loading: { stage1: false, stage2: false, stage3: false } };
                 return { ...prev, messages };
               });
               // ── Fallback: stop spinner as soon as stage3 arrives.
