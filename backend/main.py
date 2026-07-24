@@ -382,14 +382,19 @@ async def list_available_models():
                     "context_length": None,
                 })
 
+    # Build a lookup of individual model context_lengths
+    model_ctx = {m["id"]: m["context_length"] for m in all_models if m["context_length"] is not None}
+
     # Add model sets as selectable virtual models
     for set_id, ms in cfg.MODEL_SETS.items():
+        set_model_ids = ms["council"] + [ms["chairman"]]
+        ctx_lengths = [model_ctx[mid] for mid in set_model_ids if mid in model_ctx]
         all_models.append({
             "id": f"set/{set_id}",
             "name": f"{ms['label']} ({len(ms['council'])} models)",
             "provider": "set",
             "pricing": {},
-            "context_length": None,
+            "context_length": min(ctx_lengths) if ctx_lengths else None,
         })
 
     return {"models": all_models}
