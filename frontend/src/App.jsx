@@ -74,6 +74,20 @@ function App() {
     }
   };
 
+  const handleRenameConversation = async (id, title) => {
+    try {
+      await api.renameConversation(id, title);
+      setConversations((prev) =>
+        prev.map((c) => (c.id === id ? { ...c, title } : c))
+      );
+      if (currentConversationId === id) {
+        setCurrentConversation((prev) => (prev ? { ...prev, title } : prev));
+      }
+    } catch (error) {
+      console.error('Failed to rename conversation:', error);
+    }
+  };
+
   const handleStop = () => {
     if (abortRef.current) {
       abortRef.current.abort();
@@ -245,6 +259,7 @@ function App() {
         }}
         onNewConversation={handleNewConversation}
         onDeleteConversation={handleDeleteConversation}
+        onRenameConversation={handleRenameConversation}
         modelSetSelector={
           <ModelSetSelector onSetChange={setActiveModelSet} />
         }

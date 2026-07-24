@@ -113,6 +113,9 @@ class UpdateProviderRequest(BaseModel):
     stream: Optional[bool] = None
     description: Optional[str] = None
 
+class RenameConversationRequest(BaseModel):
+    title: str
+
 
 # ── OpenAI-compatible models ─────────────────────────────────────────────────
 
@@ -590,6 +593,16 @@ async def get_conversation(conversation_id: str):
     if conversation is None:
         raise HTTPException(status_code=404, detail="Conversation not found")
     return conversation
+
+
+@app.put("/api/conversations/{conversation_id}", tags=["Conversations"])
+async def rename_conversation(conversation_id: str, request: RenameConversationRequest):
+    """Rename a conversation."""
+    conversation = storage.get_conversation(conversation_id)
+    if conversation is None:
+        raise HTTPException(status_code=404, detail="Conversation not found")
+    storage.update_conversation_title(conversation_id, request.title)
+    return {"ok": True, "title": request.title}
 
 
 @app.delete("/api/conversations/{conversation_id}", tags=["Conversations"])

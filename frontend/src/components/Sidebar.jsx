@@ -7,10 +7,35 @@ export default function Sidebar({
   onSelectConversation,
   onNewConversation,
   onDeleteConversation,
+  onRenameConversation,
   modelSetSelector,
   onManageSets,
 }) {
   const [deleteConfirm, setDeleteConfirm] = useState(null);
+  const [editingId, setEditingId] = useState(null);
+  const [editValue, setEditValue] = useState('');
+
+  const handleDoubleClick = (e, conv) => {
+    e.stopPropagation();
+    setEditingId(conv.id);
+    setEditValue(conv.title || '');
+  };
+
+  const handleRenameSubmit = (id) => {
+    const trimmed = editValue.trim();
+    if (trimmed) {
+      onRenameConversation(id, trimmed);
+    }
+    setEditingId(null);
+  };
+
+  const handleRenameKeyDown = (e, id) => {
+    if (e.key === 'Enter') {
+      handleRenameSubmit(id);
+    } else if (e.key === 'Escape') {
+      setEditingId(null);
+    }
+  };
 
   return (
     <div className="sidebar">
@@ -34,7 +59,21 @@ export default function Sidebar({
               onClick={() => onSelectConversation(conv.id)}
             >
               <div className="conversation-title">
-                {conv.title || 'New Conversation'}
+                {editingId === conv.id ? (
+                  <input
+                    className="conversation-title-input"
+                    value={editValue}
+                    onChange={(e) => setEditValue(e.target.value)}
+                    onBlur={() => handleRenameSubmit(conv.id)}
+                    onKeyDown={(e) => handleRenameKeyDown(e, conv.id)}
+                    autoFocus
+                    onClick={(e) => e.stopPropagation()}
+                  />
+                ) : (
+                  <span onDoubleClick={(e) => handleDoubleClick(e, conv)}>
+                    {conv.title || 'New Conversation'}
+                  </span>
+                )}
               </div>
               <div className="conversation-meta">
                 {conv.message_count} messages
