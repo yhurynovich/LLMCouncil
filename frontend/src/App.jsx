@@ -58,6 +58,8 @@ function App() {
   };
 
   const handleSelectConversation = (id) => {
+    // Reset loading state for the UI, but let the backend continue processing
+    setIsLoading(false);
     setCurrentConversationId(id);
   };
 
@@ -107,7 +109,7 @@ function App() {
       const userMessage = { role: 'user', content };
       setCurrentConversation((prev) => ({
         ...prev,
-        messages: [...prev.messages, userMessage],
+        messages: [...(prev?.messages || []), userMessage],
       }));
 
       const assistantMessage = {
@@ -122,7 +124,7 @@ function App() {
 
       setCurrentConversation((prev) => ({
         ...prev,
-        messages: [...prev.messages, assistantMessage],
+        messages: [...(prev?.messages || []), assistantMessage],
       }));
 
       await api.sendMessageStream(
