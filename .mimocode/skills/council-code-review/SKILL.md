@@ -105,5 +105,5 @@ This prevents runaway loops where the agent endlessly reviews its own changes.
 ## Troubleshooting
 
 - **Connection error**: Backend at `http://localhost:8001/v1` may be down. Start with: `cd /path/to/LLMCouncil && python -m backend.main`
-- **Timeout**: Large codebases may take longer. The script has a 300s timeout; for very large payloads consider splitting.
+- **Timeout**: Large codebases may take longer. The script has a 600s timeout; for very large payloads consider splitting.
 - **Model set not found**: Check available sets with `curl http://localhost:8001/api/model-sets`. Create new sets via `POST /api/model-sets`.

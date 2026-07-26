@@ -1,9 +1,14 @@
 """3-stage LLM Council orchestration."""
 
+import re
+from collections import defaultdict
 from typing import List, Dict, Any, Tuple, Optional
 from .llm_client import query_models_parallel, query_model
-from .config import COUNCIL_MODELS, CHAIRMAN_MODEL, get_chairman_model
+from .config import get_council_models, get_chairman_model
 from .uploads import read_file_content, get_image_base64
+
+FINAL_RANKING_TOKEN = "FINAL RANKING:"
+MAX_RESPONSE_CHARS = 3000
 
 
 def build_message_with_files(user_query: str, files: list) -> tuple[str, list]:
@@ -36,7 +41,7 @@ async def stage1_collect_responses(
 ) -> List[Dict[str, Any]]:
     text_message, image_urls = build_message_with_files(user_query, files or [])
     messages = [{"role": "user", "content": text_message}]
-    models = council_models if council_models is not None else COUNCIL_MODELS
+    models = council_models if council_models is not None else get_council_models()
     responses = await query_models_parallel(models, messages)
 
     stage1_results = []
@@ -65,15 +70,20 @@ async def stage2_collect_rankings(
     # Filter out failed models (those with response=None)
     successful_results = [r for r in stage1_results if r.get('response') is not None]
 
-    labels = [chr(65 + i) for i in range(len(successful_results))]
+    # Use R1, R2, ... labels (scales beyond 26 models)
+    labels = [f"R{i + 1}" for i in range(len(successful_results))]
 
     label_to_model = {
         f"Response {label}": result['model']
         for label, result in zip(labels, successful_results)
     }
 
+    # Truncate long responses to avoid context overflow
+    def _truncate(text: str) -> str:
+        return text[:MAX_RESPONSE_CHARS] + "\n[truncated]" if len(text) > MAX_RESPONSE_CHARS else text
+
     responses_text = "\n\n".join([
-        f"Response {label}:\n{result['response']}"
+        f"Response {label}:\n{_truncate(result['response'])}"
         for label, result in zip(labels, successful_results)
     ])
 
@@ -92,24 +102,24 @@ Your task:
 IMPORTANT: Your final ranking MUST be formatted EXACTLY as follows:
 - Start with the line "FINAL RANKING:" (all caps, with colon)
 - Then list the responses from best to worst as a numbered list
-- Each line should be: number, period, space, then ONLY the response label (e.g., "1. Response A")
+- Each line should be: number, period, space, then ONLY the response label (e.g., "1. Response R1")
 - Do not add any other text or explanations in the ranking section
 
 Example of the correct format for your ENTIRE response:
 
-Response A provides good detail on X but misses Y...
-Response B is accurate but lacks depth on Z...
-Response C offers the most comprehensive answer...
+Response R1 provides good detail on X but misses Y...
+Response R2 is accurate but lacks depth on Z...
+Response R3 offers the most comprehensive answer...
 
 FINAL RANKING:
-1. Response C
-2. Response A
-3. Response B
+1. Response R3
+2. Response R1
+3. Response R2
 
 Now provide your evaluation and ranking:"""
 
     messages = [{"role": "user", "content": ranking_prompt}]
-    models = council_models if council_models is not None else COUNCIL_MODELS
+    models = council_models if council_models is not None else get_council_models()
     responses = await query_models_parallel(models, messages)
 
     stage2_results = []
@@ -132,7 +142,7 @@ async def stage3_synthesize_final(
     stage2_results: List[Dict[str, Any]],
     chairman_model: Optional[str] = None,
 ) -> Dict[str, Any]:
-    chair = chairman_model if chairman_model is not None else CHAIRMAN_MODEL
+    chair = chairman_model if chairman_model is not None else get_chairman_model()
 
     # Filter out failed models (those with response=None)
     successful_results = [r for r in stage1_results if r.get('response') is not None]
@@ -173,39 +183,49 @@ Provide a clear, well-reasoned final answer that represents the council's collec
 
 
 def parse_ranking_from_text(ranking_text: str) -> List[str]:
-    import re
-    if "FINAL RANKING:" in ranking_text:
-        parts = ranking_text.split("FINAL RANKING:")
-        if len(parts) >= 2:
-            ranking_section = parts[1]
-            numbered_matches = re.findall(r'\d+\.\s*Response [A-Z]', ranking_section)
-            if numbered_matches:
-                return [re.search(r'Response [A-Z]', m).group() for m in numbered_matches]
-            matches = re.findall(r'Response [A-Z]', ranking_section)
-            return matches
-    return re.findall(r'Response [A-Z]', ranking_text)
+    """Parse ranking from text. Requires explicit 'FINAL RANKING:' section."""
+    if FINAL_RANKING_TOKEN not in ranking_text:
+        return []
+
+    parts = ranking_text.split(FINAL_RANKING_TOKEN, 1)
+    if len(parts) < 2:
+        return []
+
+    ranking_section = parts[1]
+    # Strict line-based parsing: "1. Response R1" format
+    matches = re.findall(r'^\d+\.\s*(Response R\d+)', ranking_section, re.MULTILINE)
+    return matches
 
 
 def calculate_aggregate_rankings(
     stage2_results: List[Dict[str, Any]],
     label_to_model: Dict[str, str]
 ) -> List[Dict[str, Any]]:
-    from collections import defaultdict
-    model_positions = defaultdict(list)
+    model_positions: dict[str, list[int]] = defaultdict(list)
 
     for ranking in stage2_results:
-        parsed_ranking = parse_ranking_from_text(ranking['ranking'])
-        for position, label in enumerate(parsed_ranking, start=1):
+        # Reuse stored parsed_ranking if available, else parse
+        parsed = ranking.get('parsed_ranking') or parse_ranking_from_text(ranking['ranking'])
+        for position, label in enumerate(parsed, start=1):
             if label in label_to_model:
                 model_positions[label_to_model[label]].append(position)
 
     aggregate = []
     for model, positions in model_positions.items():
-        if positions:
+        aggregate.append({
+            "model": model,
+            "average_rank": round(sum(positions) / len(positions), 2) if positions else float('inf'),
+            "rankings_count": len(positions)
+        })
+
+    # Include models with zero votes at the bottom
+    voted_models = {item['model'] for item in aggregate}
+    for model in label_to_model.values():
+        if model not in voted_models:
             aggregate.append({
                 "model": model,
-                "average_rank": round(sum(positions) / len(positions), 2),
-                "rankings_count": len(positions)
+                "average_rank": float('inf'),
+                "rankings_count": 0
             })
 
     aggregate.sort(key=lambda x: x['average_rank'])
@@ -227,7 +247,8 @@ Title:"""
         return "New Conversation"
 
     title = response.get('content', 'New Conversation').strip().strip('"\'')
-    return title[:47] + "..." if len(title) > 50 else title
+    max_len = 50
+    return title[:max_len - 3] + "..." if len(title) > max_len else title
 
 
 async def run_full_council(user_query: str, council_models: Optional[List[str]] = None) -> Tuple[List, List, Dict, Dict]:

@@ -190,24 +190,42 @@ export const api = {
 
     const reader = response.body.getReader();
     const decoder = new TextDecoder();
+    let buffer = '';
 
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-
-      const chunk = decoder.decode(value);
-      const lines = chunk.split('\n');
-
-      for (const line of lines) {
-        if (line.startsWith('data: ')) {
-          try {
-            const event = JSON.parse(line.slice(6));
-            onEvent(event.type, event);
-          } catch (e) {
-            console.error('Failed to parse SSE event:', e);
-          }
+    const processLine = (line) => {
+      const trimmed = line.trim();
+      if (trimmed.startsWith('data: ')) {
+        try {
+          const event = JSON.parse(trimmed.slice(6));
+          onEvent(event.type, event);
+        } catch (e) {
+          console.error('Failed to parse SSE event:', e, trimmed);
         }
       }
+    };
+
+    try {
+      while (!signal?.aborted) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split('\n');
+        buffer = lines.pop() || '';
+
+        for (const line of lines) {
+          processLine(line);
+        }
+      }
+
+      if (buffer.trim().startsWith('data: ')) {
+        try {
+          const event = JSON.parse(buffer.trim().slice(6));
+          onEvent(event.type, event);
+        } catch { /* trailing garbage */ }
+      }
+    } finally {
+      reader.cancel().catch(() => {});
     }
   },
 };

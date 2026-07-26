@@ -1,6 +1,7 @@
 """Generic LLM client — routes queries to the correct provider."""
 import asyncio
 import json
+import logging
 import os
 import time
 import httpx
@@ -9,16 +10,20 @@ from typing import Any
 from .providers import get_provider, get_provider_api_key
 from .web_search import SEARCH_TOOL, handle_tool_call
 
+logger = logging.getLogger(__name__)
+
 STAGGER_DELAY = 0.5
 
 
 def _get_proxy_url() -> str | None:
-    """Resolve proxy URL from env, preferring HTTP/HTTPS proxy over unsupported schemes."""
-    # Prefer protocol-specific proxies (httpx handles these natively)
+    """Resolve proxy URL from env, preferring HTTP/HTTPS proxy."""
     for var in ("HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy"):
-        val = os.environ.get(var)
-        if val:
-            return val
+        val = os.environ.get(var, "").strip()
+        if not val:
+            continue
+        if not val.startswith(("http://", "https://")):
+            continue
+        return val
     return None
 
 
@@ -40,7 +45,7 @@ async def query_model(
     provider_name, model_id = _parse_model_id(model)
     provider = get_provider(provider_name)
     if provider is None:
-        print(f"Error: Unknown provider '{provider_name}' for model '{model}'")
+        logger.error("Unknown provider '%s' for model '%s'", provider_name, model)
         return None
 
     api_key = get_provider_api_key(provider)
@@ -52,56 +57,77 @@ async def query_model(
     if api_key:
         headers["Authorization"] = f"Bearer {api_key}"
 
-    # OpenRouter-specific headers
     if provider_name == "openrouter":
         headers["HTTP-Referer"] = "https://llm-council.local"
         headers["X-Title"] = "LLM Council"
 
-    # Use the provider's configured model name if available, otherwise use the parsed model_id
     api_model = provider.get("model", model_id)
     payload: dict[str, Any] = {
         "model": api_model,
         "messages": messages,
     }
 
-    # Only add tools for OpenRouter (custom providers may not support them)
     if enable_search and provider_name == "openrouter":
         payload["tools"] = [SEARCH_TOOL]
         payload["tool_choice"] = "auto"
 
-    proxy = _get_proxy_url()
-    async with httpx.AsyncClient(timeout=120.0, proxy=proxy, trust_env=False) as client:
+    async with httpx.AsyncClient(timeout=120.0) as client:
         try:
             t0 = time.monotonic()
             resp = await client.post(base_url, headers=headers, json=payload)
             resp.raise_for_status()
             data = resp.json()
 
-            choice = data["choices"][0]
-            msg = choice["message"]
+            choices = data.get("choices")
+            if not choices:
+                logger.error("API returned no choices for model %s", model)
+                return {"error": "No choices in response"}
+            msg = choices[0].get("message", {})
+            if not isinstance(msg, dict):
+                return {"error": "Invalid message field in response"}
 
             # Handle tool calls (OpenRouter only)
             if enable_search and provider_name == "openrouter" and msg.get("tool_calls"):
-                tc = msg["tool_calls"][0]
-                tool_name = tc["function"]["name"]
-                tool_args = json.loads(tc["function"]["arguments"])
+                tool_results = []
+                for tc in msg["tool_calls"]:
+                    func = tc.get("function", {})
+                    tool_name = func.get("name")
+                    raw_args = func.get("arguments")
+                    if not tool_name or not isinstance(raw_args, str):
+                        continue
+                    try:
+                        tool_args = json.loads(raw_args)
+                    except (json.JSONDecodeError, TypeError) as e:
+                        logger.warning("Failed to parse tool args for %s: %s", model, e)
+                        return {"error": f"Invalid tool call arguments: {e}"}
 
-                print(f"[{model}] search_web({tool_args.get('query', '')})")
-                search_result = handle_tool_call(tool_name, tool_args)
+                    logger.info("[%s] search_web(%s)", model, tool_args.get('query', ''))
+                    search_result = handle_tool_call(tool_name, tool_args)
+                    tool_results.append({
+                        "tool_call_id": tc["id"],
+                        "name": tool_name,
+                        "content": search_result,
+                    })
 
                 second_messages = list(messages) + [
-                    {"role": "assistant", "content": None, "tool_calls": [tc]},
-                    {"role": "tool", "tool_call_id": tc["id"], "name": tool_name, "content": search_result},
+                    {"role": "assistant", "content": None, "tool_calls": msg["tool_calls"]},
+                    *[{"role": "tool", **tr} for tr in tool_results],
                 ]
-                second_payload = {"model": model_id, "messages": second_messages}
+                second_payload = {"model": api_model, "messages": second_messages}
                 resp2 = await client.post(base_url, headers=headers, json=second_payload)
                 resp2.raise_for_status()
-                msg = resp2.json()["choices"][0]["message"]
+                data2 = resp2.json()
+                choices2 = data2.get("choices")
+                if not choices2:
+                    return {"error": "No choices in tool-callback response"}
+                msg = choices2[0].get("message", {})
+                if not isinstance(msg, dict):
+                    return {"error": "Invalid message in tool-callback response"}
 
             elapsed = round(time.monotonic() - t0, 2)
             content = msg.get("content") or ""
             if not content.strip():
-                print(f"Error querying {model}: empty response content", flush=True)
+                logger.warning("Empty response content from %s", model)
                 return {"error": "Model returned empty response"}
             result: dict[str, Any] = {"content": content, "response_time": elapsed}
             if "reasoning_details" in msg:
@@ -109,14 +135,14 @@ async def query_model(
             return result
 
         except Exception as e:
-            print(f"Error querying {model}: {e}", flush=True)
+            logger.error("Error querying %s: %s", model, e)
             return {"error": str(e)}
 
 
-async def _staggered_query(model, messages, enable_search, delay):
+async def _staggered_query(model, messages, enable_search, delay, **kwargs):
     if delay > 0:
         await asyncio.sleep(delay)
-    return await query_model(model, messages, enable_search=enable_search)
+    return await query_model(model, messages, enable_search=enable_search, **kwargs)
 
 
 async def query_models_parallel(
@@ -126,11 +152,11 @@ async def query_models_parallel(
     **kwargs,
 ) -> dict[str, Any]:
     tasks = [
-        _staggered_query(model, messages, enable_search, i * STAGGER_DELAY)
+        _staggered_query(model, messages, enable_search, i * STAGGER_DELAY, **kwargs)
         for i, model in enumerate(models)
     ]
     results = await asyncio.gather(*tasks, return_exceptions=True)
     return {
-        model: (None if isinstance(res, Exception) else res)
+        model: (res if not isinstance(res, Exception) else {"error": str(res)})
         for model, res in zip(models, results)
     }

@@ -15,16 +15,42 @@ function App() {
   const [view, setView] = useState('chat'); // 'chat' or 'manage-sets'
   const [quickMode, setQuickMode] = useState(false);
   const abortRef = useRef(null);
+  const loadConvRef = useRef(0);
 
   useEffect(() => {
     loadConversations();
   }, []);
 
   useEffect(() => {
-    if (currentConversationId) {
-      loadConversation(currentConversationId);
+    if (!currentConversationId) {
+      setCurrentConversation(null);
+      return;
     }
+    const reqId = ++loadConvRef.current;
+    let cancelled = false;
+    (async () => {
+      try {
+        const conv = await api.getConversation(currentConversationId);
+        if (!cancelled && reqId === loadConvRef.current) {
+          setCurrentConversation(conv);
+        }
+      } catch (error) {
+        if (!cancelled && error.name !== 'AbortError' && reqId === loadConvRef.current) {
+          console.error('Failed to load conversation:', error);
+        }
+      }
+    })();
+    return () => { cancelled = true; };
   }, [currentConversationId]);
+
+  useEffect(() => {
+    return () => {
+      if (abortRef.current) {
+        abortRef.current.abort();
+        abortRef.current = null;
+      }
+    };
+  }, []);
 
   const loadConversations = async () => {
     try {
@@ -35,32 +61,17 @@ function App() {
     }
   };
 
-  const loadConversation = async (id) => {
-    try {
-      const conv = await api.getConversation(id);
-      setCurrentConversation(conv);
-    } catch (error) {
-      console.error('Failed to load conversation:', error);
-    }
-  };
-
   const handleNewConversation = async () => {
     try {
       const newConv = await api.createConversation();
-      setConversations([
+      setConversations((prev) => [
         { id: newConv.id, created_at: newConv.created_at, title: 'New Conversation', message_count: 0 },
-        ...conversations,
+        ...prev,
       ]);
       setCurrentConversationId(newConv.id);
     } catch (error) {
       console.error('Failed to create conversation:', error);
     }
-  };
-
-  const handleSelectConversation = (id) => {
-    // Reset loading state for the UI, but let the backend continue processing
-    setIsLoading(false);
-    setCurrentConversationId(id);
   };
 
   const handleDeleteConversation = async (id) => {
@@ -194,10 +205,6 @@ function App() {
                 messages[messages.length - 1] = { ...lastMsg, stage3: event.data, loading: { stage1: false, stage2: false, stage3: false } };
                 return { ...prev, messages };
               });
-              // ── Fallback: stop spinner as soon as stage3 arrives.
-              // The 'complete' event may not arrive if the stream closes
-              // immediately after the last data chunk (nginx/browser timing).
-              setIsLoading(false);
               loadConversations();
               break;
 
@@ -207,12 +214,10 @@ function App() {
 
             case 'complete':
               loadConversations();
-              setIsLoading(false);
               break;
 
             case 'error':
               console.error('Stream error:', event.message);
-              // Clear all spinners on error too
               setCurrentConversation((prev) => {
                 const messages = [...prev.messages];
                 const lastMsg = messages[messages.length - 1];
@@ -221,7 +226,6 @@ function App() {
                 }
                 return { ...prev, messages };
               });
-              setIsLoading(false);
               break;
 
             default:
@@ -238,12 +242,19 @@ function App() {
         // User cancelled — keep partial results
       } else {
         console.error('Failed to send message:', error);
-        setCurrentConversation((prev) => ({
-          ...prev,
-          messages: prev.messages.slice(0, -2),
-        }));
+        setCurrentConversation((prev) => {
+          const messages = [...prev.messages];
+          const last = messages[messages.length - 1];
+          if (last?.role === 'assistant') {
+            messages[messages.length - 1] = {
+              ...last,
+              error: error.message || 'Failed to generate response',
+              loading: { stage1: false, stage2: false, stage3: false },
+            };
+          }
+          return { ...prev, messages };
+        });
       }
-      setIsLoading(false);
     } finally {
       abortRef.current = null;
       setIsLoading(false);

@@ -1,17 +1,20 @@
 import { useState } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
+import rehypeSanitize from 'rehype-sanitize';
 import './Stage2.css';
 
 function deAnonymizeText(text, labelToModel) {
-  if (!labelToModel) return text;
+  if (!labelToModel || !text) return text;
 
+  const sortedLabels = Object.keys(labelToModel).sort((a, b) => b.length - a.length);
   let result = text;
-  // Replace each "Response X" with the actual model name
-  Object.entries(labelToModel).forEach(([label, model]) => {
-    const modelShortName = model.split('/')[1] || model;
-    result = result.replace(new RegExp(label, 'g'), `**${modelShortName}**`);
-  });
+  for (const label of sortedLabels) {
+    const model = labelToModel[label];
+    const modelShortName = (model?.split('/')[1] || model || 'Unknown').replace(/[*_~`[\]\\]/g, '');
+    const escapedLabel = label.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    result = result.replace(new RegExp(escapedLabel, 'g'), `**${modelShortName}**`);
+  }
   return result;
 }
 
@@ -49,19 +52,19 @@ export default function Stage2({ rankings, labelToModel, aggregateRankings }) {
           {rankings[activeTab].model || 'Unknown'}
         </div>
         <div className="ranking-content markdown-content">
-          <ReactMarkdown remarkPlugins={[remarkGfm]}>
-            {deAnonymizeText(rankings[activeTab].ranking || '', labelToModel)}
+          <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeSanitize]}>
+            {deAnonymizeText(rankings[activeTab]?.ranking || '', labelToModel)}
           </ReactMarkdown>
         </div>
 
-        {rankings[activeTab].parsed_ranking &&
-         rankings[activeTab].parsed_ranking.length > 0 && (
+        {rankings[activeTab]?.parsed_ranking &&
+         rankings[activeTab]?.parsed_ranking.length > 0 && (
           <div className="parsed-ranking">
             <strong>Extracted Ranking:</strong>
             <ol>
-              {rankings[activeTab].parsed_ranking.map((label, i) => (
+              {rankings[activeTab]?.parsed_ranking.map((label, i) => (
                 <li key={i}>
-                  {labelToModel && labelToModel[label]
+                  {labelToModel?.[label]
                     ? labelToModel[label].split('/')[1] || labelToModel[label]
                     : label}
                 </li>

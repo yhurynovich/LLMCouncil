@@ -1,7 +1,10 @@
 """Configuration for the LLM Council."""
+import logging
 import os
 import json
 from dotenv import load_dotenv
+
+logger = logging.getLogger(__name__)
 
 load_dotenv()
 
@@ -83,18 +86,27 @@ def _load_model_sets():
         try:
             with open(MODEL_SETS_FILE, "r") as f:
                 return json.load(f)
-        except (json.JSONDecodeError, OSError):
-            pass
+        except json.JSONDecodeError as e:
+            logger.error("Corrupt model_sets file: %s", e)
+            quarantine = MODEL_SETS_FILE + ".corrupt"
+            try:
+                os.rename(MODEL_SETS_FILE, quarantine)
+            except OSError:
+                pass
+        except OSError as e:
+            logger.error("Cannot read model_sets file: %s", e)
     return dict(DEFAULT_MODEL_SETS)
 
 
 def _save_model_sets(sets: dict):
-    """Persist model sets to disk."""
+    """Persist model sets to disk atomically."""
     parent = os.path.dirname(MODEL_SETS_FILE)
     if parent:
         os.makedirs(parent, exist_ok=True)
-    with open(MODEL_SETS_FILE, "w") as f:
+    tmp = MODEL_SETS_FILE + ".tmp"
+    with open(tmp, "w") as f:
         json.dump(sets, f, indent=2)
+    os.replace(tmp, MODEL_SETS_FILE)
 
 
 from .providers import PROVIDERS
@@ -136,8 +148,8 @@ def _load_active_model_set() -> str:
                 data = json.load(f)
                 if data.get("set_id") in MODEL_SETS:
                     return data["set_id"]
-        except (json.JSONDecodeError, OSError):
-            pass
+        except (json.JSONDecodeError, OSError) as e:
+            logger.error("Cannot read active_model_set: %s", e)
     return "free"
 
 
@@ -145,8 +157,10 @@ def _save_active_model_set(set_id: str):
     parent = os.path.dirname(ACTIVE_MODEL_SET_FILE)
     if parent:
         os.makedirs(parent, exist_ok=True)
-    with open(ACTIVE_MODEL_SET_FILE, "w") as f:
+    tmp = ACTIVE_MODEL_SET_FILE + ".tmp"
+    with open(tmp, "w") as f:
         json.dump({"set_id": set_id}, f)
+    os.replace(tmp, ACTIVE_MODEL_SET_FILE)
 
 
 ACTIVE_MODEL_SET = _load_active_model_set()
@@ -162,6 +176,3 @@ def get_council_models():
 
 def get_chairman_model():
     return get_active_set()["chairman"]
-
-COUNCIL_MODELS = MODEL_SETS["free"]["council"]
-CHAIRMAN_MODEL = MODEL_SETS["free"]["chairman"]

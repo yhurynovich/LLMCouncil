@@ -21,7 +21,7 @@ from urllib.error import URLError, HTTPError
 
 DEFAULT_URL = "http://localhost:8001/v1"
 DEFAULT_MODEL = "code"
-TIMEOUT = 300
+TIMEOUT = 600
 
 
 def read_files(file_paths: list[str]) -> dict[str, str]:

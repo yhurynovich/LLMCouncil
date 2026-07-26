@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
+import rehypeSanitize from 'rehype-sanitize';
 import './Stage1.css';
 
 export default function Stage1({ responses }) {
@@ -11,9 +12,12 @@ export default function Stage1({ responses }) {
     return null;
   }
 
+  const safeIndex = Math.min(activeTab, responses.length - 1);
+
   const formatTime = (seconds) => {
-    if (!seconds && seconds !== 0) return '';
-    return seconds < 1 ? `${Math.round(seconds * 1000)}ms` : `${seconds}s`;
+    const num = Number(seconds);
+    if (Number.isNaN(num)) return '';
+    return num < 1 ? `${Math.round(num * 1000)}ms` : `${num}s`;
   };
 
   const handleErrorClick = (index) => {
@@ -48,42 +52,42 @@ export default function Stage1({ responses }) {
       </div>
 
       <div className="tab-content">
-        {responses[activeTab].error ? (
+        {responses[safeIndex]?.error ? (
           <div className="error-content">
             <div className="model-name error">
-              {responses[activeTab].model || 'Unknown'}
+              {responses[safeIndex]?.model || 'Unknown'}
               <span className="error-badge">Failed</span>
             </div>
             <div className="error-details">
               <div className="error-message">
-                {responses[activeTab].error}
+                {responses[safeIndex]?.error}
               </div>
-              {expandedError === activeTab && (
+              {expandedError === safeIndex && (
                 <div className="error-expandable">
                   <p>Full error message:</p>
-                  <pre className="error-trace">{responses[activeTab].error}</pre>
+                  <pre className="error-trace">{responses[safeIndex]?.error}</pre>
                 </div>
               )}
               <button
                 className="error-toggle"
-                onClick={() => handleErrorClick(activeTab)}
+                onClick={() => handleErrorClick(safeIndex)}
               >
-                {expandedError === activeTab ? 'Hide Details' : 'Show Details'}
+                {expandedError === safeIndex ? 'Hide Details' : 'Show Details'}
               </button>
             </div>
           </div>
         ) : (
           <>
             <div className="model-name">
-              {responses[activeTab].model || 'Unknown'}
-              {responses[activeTab].response_time != null && (
+              {responses[safeIndex]?.model || 'Unknown'}
+              {responses[safeIndex]?.response_time != null && (
                 <span className="response-time-badge">
-                  {formatTime(responses[activeTab].response_time)}
+                  {formatTime(responses[safeIndex]?.response_time)}
                 </span>
               )}
             </div>
             <div className="response-text markdown-content">
-              <ReactMarkdown remarkPlugins={[remarkGfm]}>{responses[activeTab].response || ''}</ReactMarkdown>
+              <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeSanitize]}>{responses[safeIndex]?.response || ''}</ReactMarkdown>
             </div>
           </>
         )}

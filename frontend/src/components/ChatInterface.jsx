@@ -20,14 +20,19 @@ export default function ChatInterface({
   const [isDragging, setIsDragging] = useState(false);
   const messagesEndRef = useRef(null);
   const fileInputRef = useRef(null);
+  const dragCounter = useRef(0);
 
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   };
 
   useEffect(() => {
-    scrollToBottom();
-  }, [conversation]);
+    const container = messagesEndRef.current?.parentElement;
+    if (container) {
+      const nearBottom = container.scrollHeight - container.scrollTop - container.clientHeight < 200;
+      if (nearBottom) scrollToBottom();
+    }
+  }, [conversation?.messages?.length]);
 
   const handleSubmit = (e) => {
     e.preventDefault();
@@ -39,44 +44,54 @@ export default function ChatInterface({
   };
 
   const handleKeyDown = (e) => {
-    if (e.key === 'Enter' && !e.shiftKey) {
+    if (e.key === 'Enter' && !e.shiftKey && !isLoading) {
       e.preventDefault();
       handleSubmit(e);
     }
   };
 
+  const handleFiles = async (files) => {
+    const results = await Promise.allSettled(
+      files.map(f => api.uploadFile(f))
+    );
+    const succeeded = results
+      .filter(r => r.status === 'fulfilled')
+      .map(r => r.value);
+    const failedNames = results
+      .filter(r => r.status === 'rejected')
+      .map((_, i) => files[i].name);
+    if (succeeded.length) setAttachedFiles(prev => [...prev, ...succeeded]);
+    if (failedNames.length) {
+      console.error('Failed to upload:', failedNames.join(', '));
+    }
+  };
+
   const handleFileSelect = async (e) => {
     const files = Array.from(e.target.files || []);
-    for (const file of files) {
-      try {
-        const result = await api.uploadFile(file);
-        setAttachedFiles(prev => [...prev, result]);
-      } catch (err) {
-        console.error('Failed to upload:', err);
-      }
-    }
+    await handleFiles(files);
     if (fileInputRef.current) fileInputRef.current.value = '';
   };
 
   const handleDragOver = (e) => {
     e.preventDefault();
-    setIsDragging(true);
   };
 
-  const handleDragLeave = () => setIsDragging(false);
+  const handleDragEnter = (e) => {
+    e.preventDefault();
+    if (++dragCounter.current === 1) setIsDragging(true);
+  };
+
+  const handleDragLeave = (e) => {
+    e.preventDefault();
+    if (--dragCounter.current === 0) setIsDragging(false);
+  };
 
   const handleDrop = async (e) => {
     e.preventDefault();
     setIsDragging(false);
+    dragCounter.current = 0;
     const files = Array.from(e.dataTransfer.files);
-    for (const file of files) {
-      try {
-        const result = await api.uploadFile(file);
-        setAttachedFiles(prev => [...prev, result]);
-      } catch (err) {
-        console.error('Failed to upload:', err);
-      }
-    }
+    await handleFiles(files);
   };
 
   const removeFile = (fileId) => {
@@ -165,6 +180,7 @@ export default function ChatInterface({
       <form
         className={`input-form ${isDragging ? 'drag-over' : ''}`}
         onSubmit={handleSubmit}
+        onDragEnter={handleDragEnter}
         onDragOver={handleDragOver}
         onDragLeave={handleDragLeave}
         onDrop={handleDrop}
@@ -179,6 +195,7 @@ export default function ChatInterface({
                   type="button"
                   className="file-chip-remove"
                   onClick={() => removeFile(f.file_id)}
+                  aria-label={`Remove ${f.filename}`}
                 >
                   ×
                 </button>
@@ -201,6 +218,7 @@ export default function ChatInterface({
             onClick={() => fileInputRef.current?.click()}
             disabled={isLoading}
             title="Attach file"
+            aria-label="Attach file"
           >
             📎
           </button>
@@ -220,6 +238,7 @@ export default function ChatInterface({
               onClick={() => onQuickModeChange(!quickMode)}
               disabled={isLoading}
               title={quickMode ? 'Quick mode ON: Skip peer ranking & synthesis' : 'Click to enable quick mode'}
+              aria-label={quickMode ? 'Disable quick mode' : 'Enable quick mode'}
             >
               ⚡
             </button>

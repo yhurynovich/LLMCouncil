@@ -32,8 +32,10 @@ def _save_providers(providers: dict):
     parent = os.path.dirname(PROVIDERS_FILE)
     if parent:
         os.makedirs(parent, exist_ok=True)
-    with open(PROVIDERS_FILE, "w") as f:
+    tmp = PROVIDERS_FILE + ".tmp"
+    with open(tmp, "w") as f:
         json.dump(providers, f, indent=2)
+    os.replace(tmp, PROVIDERS_FILE)
 
 
 PROVIDERS = _load_providers()

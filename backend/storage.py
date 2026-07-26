@@ -1,13 +1,18 @@
 """JSON-based storage for conversations."""
 
 import json
+import logging
 import os
+import re
 from datetime import datetime
 from typing import List, Dict, Any, Optional
 from pathlib import Path
 from .config import DATA_DIR
 
+logger = logging.getLogger(__name__)
+
 MAX_CONVERSATIONS = 50
+_UUID_RE = re.compile(r'^[0-9a-fA-F-]+$')
 
 
 def ensure_data_dir():
@@ -16,7 +21,9 @@ def ensure_data_dir():
 
 
 def get_conversation_path(conversation_id: str) -> str:
-    """Get the file path for a conversation."""
+    """Get the file path for a conversation. Validates ID format."""
+    if not conversation_id or not _UUID_RE.match(conversation_id):
+        raise ValueError(f"Invalid conversation ID: {conversation_id}")
     return os.path.join(DATA_DIR, f"{conversation_id}.json")
 
 
@@ -65,12 +72,12 @@ def create_conversation(conversation_id: str) -> Dict[str, Any]:
         "messages": []
     }
 
-    # Save to file
+    # Save to file atomically
     path = get_conversation_path(conversation_id)
-    with open(path, 'w') as f:
+    tmp = path + ".tmp"
+    with open(tmp, 'w') as f:
         json.dump(conversation, f, indent=2)
-
-    enforce_retention()
+    os.replace(tmp, path)
 
     return conversation
 
@@ -96,7 +103,7 @@ def get_conversation(conversation_id: str) -> Optional[Dict[str, Any]]:
 
 def save_conversation(conversation: Dict[str, Any]):
     """
-    Save a conversation to storage.
+    Save a conversation to storage atomically.
 
     Args:
         conversation: Conversation dict to save
@@ -104,8 +111,10 @@ def save_conversation(conversation: Dict[str, Any]):
     ensure_data_dir()
 
     path = get_conversation_path(conversation['id'])
-    with open(path, 'w') as f:
+    tmp = path + ".tmp"
+    with open(tmp, 'w') as f:
         json.dump(conversation, f, indent=2)
+    os.replace(tmp, path)
 
 
 def list_conversations() -> List[Dict[str, Any]]:
@@ -121,15 +130,18 @@ def list_conversations() -> List[Dict[str, Any]]:
     for filename in os.listdir(DATA_DIR):
         if filename.endswith('.json'):
             path = os.path.join(DATA_DIR, filename)
-            with open(path, 'r') as f:
-                data = json.load(f)
-                # Return metadata only
+            try:
+                with open(path, 'r') as f:
+                    data = json.load(f)
                 conversations.append({
                     "id": data["id"],
                     "created_at": data["created_at"],
                     "title": data.get("title", "New Conversation"),
                     "message_count": len(data["messages"])
                 })
+            except (json.JSONDecodeError, KeyError, OSError) as e:
+                logger.warning("Skipping corrupt conversation file %s: %s", filename, e)
+                continue
 
     # Sort by creation time, newest first
     conversations.sort(key=lambda x: x["created_at"], reverse=True)

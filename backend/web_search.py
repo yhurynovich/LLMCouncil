@@ -4,9 +4,10 @@ SearXNG runs as a sibling Docker container on the llm-council network.
 Internal container-to-container communication always uses port 8080.
 """
 
+import os
 import httpx
 
-SEARXNG_URL = "http://searxng:8080/search"  # internal Docker network port, always 8080
+SEARXNG_URL = os.getenv("SEARXNG_URL", "http://searxng:8080/search")
 
 SEARCH_TOOL = {
     "type": "function",
