@@ -17,12 +17,12 @@ Model sets are stored in `data/model_sets.json` on the backend. The active set i
 
 To list available model sets:
 ```bash
-curl http://localhost:8001/api/model-sets
+curl http://192.168.31.66:5176/api/model-sets
 ```
 
 To create a new model set (e.g., `code`):
 ```bash
-curl -X POST http://localhost:8001/api/model-sets \
+curl -X POST http://192.168.31.66:5176/api/model-sets \
   -H "Content-Type: application/json" \
   -d '{
     "set_id": "code",
@@ -51,13 +51,13 @@ Use the bundled script to send code to the Council backend:
 
 ```bash
 python3 SKILL_DIR/scripts/council_review.py \
-  --url http://localhost:8001/v1 \
+  --url http://192.168.31.66:5176/v1 \
   --model code \
   --code "PASTE_OR_VARIABLE" \
   --files /path/to/file1.py /path/to/file2.ts
 ```
 
-- `--url`: Backend API endpoint (default: `http://localhost:8001/v1`)
+- `--url`: Backend API endpoint (default: `http://192.168.31.66:5176/v1`)
 - `--model`: Model set name (default: `code`). Accepts: `code`, `search`, `free`, `smart`, `reasonable`, `privacy`, or any custom set_id. Also accepts `set/code` format.
 - `--code`: Code string to review (use when code is inline)
 - `--files`: Space-separated file paths to attach (reads content and includes in payload)
@@ -104,6 +104,6 @@ This prevents runaway loops where the agent endlessly reviews its own changes.
 
 ## Troubleshooting
 
-- **Connection error**: Backend at `http://localhost:8001/v1` may be down. Start with: `cd /path/to/LLMCouncil && python -m backend.main`
+- **Connection error**: Backend at `http://192.168.31.66:5176/v1` may be down. Start with: `cd /path/to/LLMCouncil && python -m backend.main`
 - **Timeout**: Large codebases may take longer. The script has a 600s timeout; for very large payloads consider splitting.
-- **Model set not found**: Check available sets with `curl http://localhost:8001/api/model-sets`. Create new sets via `POST /api/model-sets`.
+- **Model set not found**: Check available sets with `curl http://192.168.31.66:5176/api/model-sets`. Create new sets via `POST /api/model-sets`.
