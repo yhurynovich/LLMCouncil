@@ -2,7 +2,7 @@
 """
 Council Code Review - sends code to LLM Council backend for multi-model deliberation.
 
-Backend: http://192.168.31.66:5176/v1
+Backend: http://192.168.31.66:5174/v1
 Model set: code (server-side group of models)
 
 Usage:
@@ -19,7 +19,7 @@ from urllib.request import Request, urlopen
 from urllib.error import URLError, HTTPError
 
 
-DEFAULT_URL = "http://192.168.31.66:5176/v1"
+DEFAULT_URL = "http://192.168.31.66:5174/v1"
 DEFAULT_MODEL = "code"
 TIMEOUT = 600
 

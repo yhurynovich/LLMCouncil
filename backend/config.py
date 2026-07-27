@@ -1,7 +1,9 @@
 """Configuration for the LLM Council."""
+import asyncio
 import logging
 import os
 import json
+from typing import Dict, Any, List, Optional
 from dotenv import load_dotenv
 
 logger = logging.getLogger(__name__)
@@ -78,28 +80,161 @@ DEFAULT_MODEL_SETS = {
 }
 
 MODEL_SETS_FILE = "data/model_sets.json"
+ACTIVE_MODEL_SET_FILE = "data/active_model_set.json"
+
+# Locks for thread-safe access to mutable global state
+_model_sets_lock = asyncio.Lock()
+_active_set_lock = asyncio.Lock()
+
+# Cached state
+_model_sets: Optional[Dict[str, Any]] = None
+_active_model_set: Optional[str] = None
 
 
-def _load_model_sets():
+def _get_providers() -> Dict[str, Any]:
+    """Lazy import to avoid circular dependency with providers.py."""
+    from .providers import PROVIDERS
+    return PROVIDERS
+
+
+async def _load_model_sets_async() -> Dict[str, Any]:
     """Load model sets from persisted file, falling back to defaults."""
+    try:
+        if os.path.exists(MODEL_SETS_FILE):
+            import aiofiles
+            async with aiofiles.open(MODEL_SETS_FILE, "r") as f:
+                content = await f.read()
+                return json.loads(content)
+    except (json.JSONDecodeError, OSError) as e:
+        logger.error("Error loading model_sets: %s", e)
+    return dict(DEFAULT_MODEL_SETS)
+
+
+async def _save_model_sets_async(sets: Dict[str, Any]) -> None:
+    """Persist model sets to disk atomically using async I/O."""
+    parent = os.path.dirname(MODEL_SETS_FILE)
+    if parent:
+        os.makedirs(parent, exist_ok=True)
+    tmp = MODEL_SETS_FILE + ".tmp"
+    import aiofiles
+    async with aiofiles.open(tmp, "w") as f:
+        await f.write(json.dumps(sets, indent=2))
+    os.replace(tmp, MODEL_SETS_FILE)
+
+
+async def get_model_sets() -> Dict[str, Any]:
+    """Get model sets with lazy initialization and thread-safe access."""
+    global _model_sets
+    if _model_sets is None:
+        async with _model_sets_lock:
+            if _model_sets is None:
+                _model_sets = await _load_model_sets_async()
+    return _model_sets
+
+
+async def reload_model_sets() -> Dict[str, Any]:
+    """Force reload model sets from disk."""
+    global _model_sets
+    async with _model_sets_lock:
+        _model_sets = await _load_model_sets_async()
+    return _model_sets
+
+
+async def set_model_sets(sets: Dict[str, Any]) -> Dict[str, Any]:
+    """Update model sets atomically."""
+    global _model_sets
+    async with _model_sets_lock:
+        await _save_model_sets_async(sets)
+        _model_sets = sets
+    return _model_sets
+
+
+async def _load_active_model_set_async() -> str:
+    """Load active model set from disk."""
+    try:
+        if os.path.exists(ACTIVE_MODEL_SET_FILE):
+            import aiofiles
+            async with aiofiles.open(ACTIVE_MODEL_SET_FILE, "r") as f:
+                content = await f.read()
+                data = json.loads(content)
+                model_sets = await get_model_sets()
+                if data.get("set_id") in model_sets:
+                    return data["set_id"]
+    except (json.JSONDecodeError, OSError) as e:
+        logger.error("Cannot read active_model_set: %s", e)
+    return "free"
+
+
+async def _save_active_model_set_async(set_id: str) -> None:
+    """Persist active model set to disk atomically."""
+    parent = os.path.dirname(ACTIVE_MODEL_SET_FILE)
+    if parent:
+        os.makedirs(parent, exist_ok=True)
+    tmp = ACTIVE_MODEL_SET_FILE + ".tmp"
+    import aiofiles
+    async with aiofiles.open(tmp, "w") as f:
+        await f.write(json.dumps({"set_id": set_id}))
+    os.replace(tmp, ACTIVE_MODEL_SET_FILE)
+
+
+async def get_active_model_set() -> str:
+    """Get active model set with lazy initialization."""
+    global _active_model_set
+    if _active_model_set is None:
+        async with _active_set_lock:
+            if _active_model_set is None:
+                _active_model_set = await _load_active_model_set_async()
+    return _active_model_set
+
+
+async def set_active_model_set(set_id: str) -> str:
+    """Set active model set atomically."""
+    global _active_model_set
+    model_sets = await get_model_sets()
+    if set_id not in model_sets:
+        raise ValueError(f"Unknown model set: {set_id}")
+    async with _active_set_lock:
+        await _save_active_model_set_async(set_id)
+        _active_model_set = set_id
+    return _active_model_set
+
+
+BUILTIN_SET_IDS = {"free", "smart", "reasonable", "privacy"}
+
+
+async def get_active_set() -> Dict[str, Any]:
+    """Get the currently active model set configuration."""
+    active_id = await get_active_model_set()
+    model_sets = await get_model_sets()
+    return model_sets[active_id]
+
+
+async def get_council_models() -> List[str]:
+    """Get the council models for the active set."""
+    active = await get_active_set()
+    return active["council"]
+
+
+async def get_chairman_model() -> str:
+    """Get the chairman model for the active set."""
+    active = await get_active_set()
+    return active["chairman"]
+
+
+# Backwards compatibility - synchronous wrappers (for non-async contexts)
+def _load_model_sets_sync() -> Dict[str, Any]:
+    """Synchronous version for backwards compatibility."""
     if os.path.exists(MODEL_SETS_FILE):
         try:
             with open(MODEL_SETS_FILE, "r") as f:
                 return json.load(f)
-        except json.JSONDecodeError as e:
+        except (json.JSONDecodeError, OSError) as e:
             logger.error("Corrupt model_sets file: %s", e)
-            quarantine = MODEL_SETS_FILE + ".corrupt"
-            try:
-                os.rename(MODEL_SETS_FILE, quarantine)
-            except OSError:
-                pass
-        except OSError as e:
-            logger.error("Cannot read model_sets file: %s", e)
     return dict(DEFAULT_MODEL_SETS)
 
 
-def _save_model_sets(sets: dict):
-    """Persist model sets to disk atomically."""
+def _save_model_sets_sync(sets: Dict[str, Any]) -> None:
+    """Synchronous version for backwards compatibility."""
     parent = os.path.dirname(MODEL_SETS_FILE)
     if parent:
         os.makedirs(parent, exist_ok=True)
@@ -109,70 +244,47 @@ def _save_model_sets(sets: dict):
     os.replace(tmp, MODEL_SETS_FILE)
 
 
-from .providers import PROVIDERS
+# Module-level cached values for sync access (initialized on first access)
+_MODEL_SETS_SYNC: Optional[Dict[str, Any]] = None
+_ACTIVE_MODEL_SET_SYNC: Optional[str] = None
 
 
-def _ensure_provider_prefix(model_sets: dict) -> dict:
-    """Auto-prefix model IDs with 'openrouter/' if no provider prefix present."""
-    needs_save = False
-    for set_id, ms in model_sets.items():
-        for field in ("council", "chairman"):
-            val = ms[field]
-            if isinstance(val, list):
-                new_val = []
-                for m in val:
-                    if "/" not in m or m.split("/")[0] not in PROVIDERS:
-                        new_val.append(f"openrouter/{m}")
-                        needs_save = True
-                    else:
-                        new_val.append(m)
-                ms[field] = new_val
-            elif isinstance(val, str) and val:
-                if "/" not in val or val.split("/")[0] not in PROVIDERS:
-                    ms[field] = f"openrouter/{val}"
-                    needs_save = True
-    if needs_save:
-        _save_model_sets(model_sets)
-    return model_sets
+def _get_model_sets_sync() -> Dict[str, Any]:
+    """Get model sets synchronously (for backwards compatibility)."""
+    global _MODEL_SETS_SYNC
+    if _MODEL_SETS_SYNC is None:
+        _MODEL_SETS_SYNC = _load_model_sets_sync()
+    return _MODEL_SETS_SYNC
 
 
-MODEL_SETS = _ensure_provider_prefix(_load_model_sets())
-
-ACTIVE_MODEL_SET_FILE = "data/active_model_set.json"
-
-
-def _load_active_model_set() -> str:
-    if os.path.exists(ACTIVE_MODEL_SET_FILE):
+def _get_active_model_set_sync() -> str:
+    """Get active model set synchronously (for backwards compatibility)."""
+    global _ACTIVE_MODEL_SET_SYNC
+    if _ACTIVE_MODEL_SET_SYNC is None:
         try:
-            with open(ACTIVE_MODEL_SET_FILE, "r") as f:
-                data = json.load(f)
-                if data.get("set_id") in MODEL_SETS:
-                    return data["set_id"]
+            if os.path.exists(ACTIVE_MODEL_SET_FILE):
+                with open(ACTIVE_MODEL_SET_FILE, "r") as f:
+                    data = json.load(f)
+                    if data.get("set_id") in _get_model_sets_sync():
+                        _ACTIVE_MODEL_SET_SYNC = data["set_id"]
         except (json.JSONDecodeError, OSError) as e:
             logger.error("Cannot read active_model_set: %s", e)
-    return "free"
+    if _ACTIVE_MODEL_SET_SYNC is None:
+        _ACTIVE_MODEL_SET_SYNC = "free"
+    return _ACTIVE_MODEL_SET_SYNC
 
 
-def _save_active_model_set(set_id: str):
-    parent = os.path.dirname(ACTIVE_MODEL_SET_FILE)
-    if parent:
-        os.makedirs(parent, exist_ok=True)
-    tmp = ACTIVE_MODEL_SET_FILE + ".tmp"
-    with open(tmp, "w") as f:
-        json.dump({"set_id": set_id}, f)
-    os.replace(tmp, ACTIVE_MODEL_SET_FILE)
+# For backwards compatibility with existing code
+def get_active_set_sync() -> Dict[str, Any]:
+    """Synchronous getter for active set."""
+    return _get_model_sets_sync()[_get_active_model_set_sync()]
 
 
-ACTIVE_MODEL_SET = _load_active_model_set()
+def get_council_models_sync() -> List[str]:
+    """Synchronous getter for council models."""
+    return get_active_set_sync()["council"]
 
-BUILTIN_SET_IDS = {"free", "smart", "reasonable", "privacy"}
 
-
-def get_active_set():
-    return MODEL_SETS[ACTIVE_MODEL_SET]
-
-def get_council_models():
-    return get_active_set()["council"]
-
-def get_chairman_model():
-    return get_active_set()["chairman"]
+def get_chairman_model_sync() -> str:
+    """Synchronous getter for chairman model."""
+    return get_active_set_sync()["chairman"]

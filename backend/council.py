@@ -2,47 +2,71 @@
 
 import re
 from collections import defaultdict
-from typing import List, Dict, Any, Tuple, Optional
+from typing import List, Dict, Any, Tuple, Optional, Union
 from .llm_client import query_models_parallel, query_model
-from .config import get_council_models, get_chairman_model
+from .config import get_council_models, get_chairman_model, get_council_models_sync, get_chairman_model_sync
 from .uploads import read_file_content, get_image_base64
 
 FINAL_RANKING_TOKEN = "FINAL RANKING:"
 MAX_RESPONSE_CHARS = 3000
 
 
-def build_message_with_files(user_query: str, files: list) -> tuple[str, list]:
-    """Prepends file content to user query. Returns (text_message, image_urls)."""
+def build_message_with_files(user_query: str, files: list) -> Union[str, List[Dict[str, Any]]]:
+    """Prepends file content to user query. Returns multimodal content for vision-capable models."""
     if not files:
-        return user_query, []
+        return user_query
 
-    parts = []
-    image_urls = []
+    content_parts = []
 
+    # Add text files first
     for f in files:
         if f.type == "text":
             content = read_file_content(f.file_id, f.ext)
-            parts.append(f"File: {f.filename}\n```\n{content}\n```")
-        elif f.type == "image":
+            content_parts.append({
+                "type": "text",
+                "text": f"File: {f.filename}\n```\n{content}\n```"
+            })
+
+    # Add the user query as text
+    content_parts.append({
+        "type": "text",
+        "text": user_query
+    })
+
+    # Add images
+    for f in files:
+        if f.type == "image":
             b64 = get_image_base64(f.file_id, f.ext)
             if b64:
                 mime = f"image/{f.ext.lstrip('.')}"
-                image_urls.append(f"data:{mime};base64,{b64}")
+                content_parts.append({
+                    "type": "image_url",
+                    "image_url": {"url": f"data:{mime};base64,{b64}"}
+                })
 
-    if parts:
-        return "\n\n".join(parts) + "\n\n" + user_query, image_urls
-    return user_query, image_urls
+    # If only text content, return as string for backwards compatibility
+    if all(p["type"] == "text" for p in content_parts):
+        return "\n\n".join(p["text"] for p in content_parts)
+
+    return content_parts
 
 
 async def stage1_collect_responses(
-    user_query: str,
+    messages: List[Dict[str, Any]],
     council_models: Optional[List[str]] = None,
     files: Optional[list] = None,
+    temperature: Optional[float] = None,
+    max_tokens: Optional[int] = None,
 ) -> List[Dict[str, Any]]:
-    text_message, image_urls = build_message_with_files(user_query, files or [])
-    messages = [{"role": "user", "content": text_message}]
-    models = council_models if council_models is not None else get_council_models()
-    responses = await query_models_parallel(models, messages)
+    # Handle files if present (multimodal content)
+    if files:
+        content = build_message_with_files(messages[-1].get("content", ""), files)
+        new_messages = messages[:-1] + [{"role": "user", "content": content}]
+    else:
+        new_messages = messages
+    
+    models = council_models if council_models is not None else await get_council_models()
+    responses = await query_models_parallel(models, new_messages, temperature=temperature, max_tokens=max_tokens)
 
     stage1_results = []
     for model, response in responses.items():
@@ -63,9 +87,11 @@ async def stage1_collect_responses(
 
 
 async def stage2_collect_rankings(
-    user_query: str,
+    messages: List[Dict[str, Any]],
     stage1_results: List[Dict[str, Any]],
     council_models: Optional[List[str]] = None,
+    temperature: Optional[float] = None,
+    max_tokens: Optional[int] = None,
 ) -> Tuple[List[Dict[str, Any]], Dict[str, str]]:
     # Filter out failed models (those with response=None)
     successful_results = [r for r in stage1_results if r.get('response') is not None]
@@ -86,6 +112,14 @@ async def stage2_collect_rankings(
         f"Response {label}:\n{_truncate(result['response'])}"
         for label, result in zip(labels, successful_results)
     ])
+
+    # Extract the user query from the messages for the ranking prompt
+    # Use the LAST user message (most recent) for context
+    user_query = ""
+    for msg in reversed(messages):
+        if msg["role"] == "user":
+            user_query = msg.get("content", "")
+            break
 
     ranking_prompt = f"""You are evaluating different responses to the following question:
 
@@ -119,8 +153,8 @@ FINAL RANKING:
 Now provide your evaluation and ranking:"""
 
     messages = [{"role": "user", "content": ranking_prompt}]
-    models = council_models if council_models is not None else get_council_models()
-    responses = await query_models_parallel(models, messages)
+    models = council_models if council_models is not None else await get_council_models()
+    responses = await query_models_parallel(models, messages, temperature=temperature, max_tokens=max_tokens)
 
     stage2_results = []
     for model, response in responses.items():
@@ -137,12 +171,14 @@ Now provide your evaluation and ranking:"""
 
 
 async def stage3_synthesize_final(
-    user_query: str,
+    messages: List[Dict[str, Any]],
     stage1_results: List[Dict[str, Any]],
     stage2_results: List[Dict[str, Any]],
     chairman_model: Optional[str] = None,
+    temperature: Optional[float] = None,
+    max_tokens: Optional[int] = None,
 ) -> Dict[str, Any]:
-    chair = chairman_model if chairman_model is not None else get_chairman_model()
+    chair = chairman_model if chairman_model is not None else await get_chairman_model()
 
     # Filter out failed models (those with response=None)
     successful_results = [r for r in stage1_results if r.get('response') is not None]
@@ -155,6 +191,14 @@ async def stage3_synthesize_final(
         f"Model: {result['model']}\nRanking: {result['ranking']}"
         for result in stage2_results
     ])
+
+    # Extract the user query from the messages
+    # Use the LAST user message (most recent) for context
+    user_query = ""
+    for msg in reversed(messages):
+        if msg["role"] == "user":
+            user_query = msg.get("content", "")
+            break
 
     chairman_prompt = f"""You are the Chairman of an LLM Council. Multiple AI models have provided responses to a user's question, and then ranked each other's responses.
 
@@ -174,7 +218,7 @@ Your task as Chairman is to synthesize all of this information into a single, co
 Provide a clear, well-reasoned final answer that represents the council's collective wisdom:"""
 
     messages = [{"role": "user", "content": chairman_prompt}]
-    response = await query_model(chair, messages)
+    response = await query_model(chair, messages, temperature=temperature, max_tokens=max_tokens)
 
     if response is None:
         return {"model": chair, "response": "Error: Unable to generate final synthesis."}
@@ -183,7 +227,7 @@ Provide a clear, well-reasoned final answer that represents the council's collec
 
 
 def parse_ranking_from_text(ranking_text: str) -> List[str]:
-    """Parse ranking from text. Requires explicit 'FINAL RANKING:' section."""
+    """Parse ranking from text. Supports multiple formats for resilience."""
     if FINAL_RANKING_TOKEN not in ranking_text:
         return []
 
@@ -192,9 +236,25 @@ def parse_ranking_from_text(ranking_text: str) -> List[str]:
         return []
 
     ranking_section = parts[1]
-    # Strict line-based parsing: "1. Response R1" format
-    matches = re.findall(r'^\d+\.\s*(Response R\d+)', ranking_section, re.MULTILINE)
-    return matches
+    
+    # Try multiple parsing patterns in order of preference
+    patterns = [
+        # Standard: "1. Response R1" or "1. Response R10"
+        r'^\d+\.\s*(Response R\d+)',
+        # With parentheses: "1) Response R1"
+        r'^\d+\)\s*(Response R\d+)',
+        # Dash format: "- Response R1"
+        r'^[-*]\s*(Response R\d+)',
+        # Plain: "Response R1" on separate lines
+        r'^(Response R\d+)',
+    ]
+    
+    for pattern in patterns:
+        matches = re.findall(pattern, ranking_section, re.MULTILINE)
+        if matches:
+            return matches
+    
+    return []
 
 
 def calculate_aggregate_rankings(
@@ -241,7 +301,7 @@ Question: {user_query}
 Title:"""
 
     messages = [{"role": "user", "content": title_prompt}]
-    response = await query_model(get_chairman_model(), messages, timeout=30.0)
+    response = await query_model(await get_chairman_model(), messages, timeout=30.0)
 
     if response is None:
         return "New Conversation"
@@ -251,8 +311,8 @@ Title:"""
     return title[:max_len - 3] + "..." if len(title) > max_len else title
 
 
-async def run_full_council(user_query: str, council_models: Optional[List[str]] = None) -> Tuple[List, List, Dict, Dict]:
-    stage1_results = await stage1_collect_responses(user_query, council_models=council_models)
+async def run_full_council(messages: List[Dict[str, Any]], council_models: Optional[List[str]] = None, temperature: Optional[float] = None, max_tokens: Optional[int] = None) -> Tuple[List, List, Dict, Dict]:
+    stage1_results = await stage1_collect_responses(messages, council_models=council_models, temperature=temperature, max_tokens=max_tokens)
 
     if not stage1_results:
         return [], [], {
@@ -261,9 +321,9 @@ async def run_full_council(user_query: str, council_models: Optional[List[str]] 
         }, {}
 
     responding_models = [r["model"] for r in stage1_results if r.get("response") is not None]
-    stage2_results, label_to_model = await stage2_collect_rankings(user_query, stage1_results, responding_models)
+    stage2_results, label_to_model = await stage2_collect_rankings(messages, stage1_results, responding_models, temperature=temperature, max_tokens=max_tokens)
     aggregate_rankings = calculate_aggregate_rankings(stage2_results, label_to_model)
-    stage3_result = await stage3_synthesize_final(user_query, stage1_results, stage2_results)
+    stage3_result = await stage3_synthesize_final(messages, stage1_results, stage2_results, temperature=temperature, max_tokens=max_tokens)
 
     return stage1_results, stage2_results, stage3_result, {
         "label_to_model": label_to_model,

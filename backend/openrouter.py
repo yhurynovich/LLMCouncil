@@ -2,13 +2,27 @@
 
 import asyncio
 import json
+import re
 import httpx
 from typing import Any
 
 from .config import OPENROUTER_API_KEY, OPENROUTER_API_URL
 from .web_search import SEARCH_TOOL, handle_tool_call
+from .llm_client import _get_proxy_url
+from .http_client import get_shared_client
 
 STAGGER_DELAY = 0.5  # seconds between each model request
+
+
+class BearerAuth(httpx.Auth):
+    """Custom auth to avoid exposing API key in request objects/logs."""
+    
+    def __init__(self, token: str):
+        self.token = token
+    
+    def auth_flow(self, request: httpx.Request) -> httpx.Response:
+        request.headers["Authorization"] = f"Bearer {self.token}"
+        yield request
 
 
 async def query_model(
@@ -28,12 +42,8 @@ async def query_model(
         print(f"Error: No API key configured")
         return None
 
-    headers = {
-        "Authorization": f"Bearer {OPENROUTER_API_KEY}",
-        "Content-Type": "application/json",
-        "HTTP-Referer": "https://llm-council.local",
-        "X-Title": "LLM Council",
-    }
+    # Use BearerAuth to avoid exposing API key in request objects/logs
+    auth = BearerAuth(OPENROUTER_API_KEY)
 
     payload: dict[str, Any] = {
         "model": model,
@@ -43,59 +53,87 @@ async def query_model(
         payload["tools"] = [SEARCH_TOOL]
         payload["tool_choice"] = "auto"
 
-    async with httpx.AsyncClient(timeout=120.0) as client:
-        try:
-            # ── First request ────────────────────────────────────────────────
-            resp = await client.post(OPENROUTER_API_URL, headers=headers, json=payload)
-            resp.raise_for_status()
-            data = resp.json()
+    # Pass temperature and max_tokens if provided
+    if "temperature" in kwargs:
+        payload["temperature"] = kwargs["temperature"]
+    if "max_tokens" in kwargs:
+        payload["max_tokens"] = kwargs["max_tokens"]
 
-            choice = data["choices"][0]
-            msg    = choice["message"]
+    proxy_url = _get_proxy_url()
+    # Use shared client from app state for connection pooling
+    client = get_shared_client()
+    if client is None:
+        raise RuntimeError("Shared HTTP client not initialized. Ensure the FastAPI lifespan has started.")
+    
+    try:
+        # ── First request ────────────────────────────────────────────────
+        resp = await client.post(
+            OPENROUTER_API_URL, 
+            json=payload, 
+            auth=auth, 
+            timeout=kwargs.get("timeout", 120.0),
+            proxy=proxy_url
+        )
+        resp.raise_for_status()
+        data = resp.json()
 
-            # ── Did the model call the search tool? ──────────────────────────
-            if enable_search and msg.get("tool_calls"):
-                tc        = msg["tool_calls"][0]
-                tool_name = tc["function"]["name"]
-                tool_args = json.loads(tc["function"]["arguments"])
+        choice = data["choices"][0]
+        msg    = choice["message"]
 
-                print(f"[{model}] search_web({tool_args.get('query', '')})")
-                search_result = handle_tool_call(tool_name, tool_args)
+        # ── Did the model call the search tool? ──────────────────────────
+        if enable_search and msg.get("tool_calls"):
+            tc        = msg["tool_calls"][0]
+            tool_name = tc["function"]["name"]
+            tool_args = json.loads(tc["function"]["arguments"])
 
-                second_messages = list(messages) + [
-                    {
-                        "role": "assistant",
-                        "content": None,
-                        "tool_calls": [tc],
-                    },
-                    {
-                        "role": "tool",
-                        "tool_call_id": tc["id"],
-                        "name": tool_name,
-                        "content": search_result,
-                    },
-                ]
+            print(f"[{model}] search_web({tool_args.get('query', '')})")
+            search_result = await handle_tool_call(tool_name, tool_args)
 
-                second_payload = {
-                    "model": model,
-                    "messages": second_messages,
-                }
-                resp2 = await client.post(
-                    OPENROUTER_API_URL, headers=headers, json=second_payload
-                )
-                resp2.raise_for_status()
-                data2  = resp2.json()
-                msg    = data2["choices"][0]["message"]
+            second_messages = list(messages) + [
+                {
+                    "role": "assistant",
+                    "content": None,
+                    "tool_calls": [tc],
+                },
+                {
+                    "role": "tool",
+                    "tool_call_id": tc["id"],
+                    "name": tool_name,
+                    "content": search_result,
+                },
+            ]
 
-            # ── Return normalised result ─────────────────────────────────────
-            result: dict[str, Any] = {"content": msg.get("content", "")}
-            if "reasoning_details" in msg:
-                result["reasoning_details"] = msg["reasoning_details"]
-            return result
+            # Copy over temperature and max_tokens for the second request
+            second_payload = {
+                "model": model,
+                "messages": second_messages,
+            }
+            if "temperature" in kwargs:
+                second_payload["temperature"] = kwargs["temperature"]
+            if "max_tokens" in kwargs:
+                second_payload["max_tokens"] = kwargs["max_tokens"]
 
-        except Exception as e:
-            print(f"Error querying {model}: {e}")
-            return None
+            resp2 = await client.post(
+                OPENROUTER_API_URL, json=second_payload, auth=auth, timeout=kwargs.get("timeout", 120.0), proxy=proxy_url
+            )
+            resp2.raise_for_status()
+            data2  = resp2.json()
+            msg    = data2["choices"][0]["message"]
+
+        # ── Return normalised result ─────────────────────────────────────
+        result: dict[str, Any] = {"content": msg.get("content", "")}
+        if "reasoning_details" in msg:
+            result["reasoning_details"] = msg["reasoning_details"]
+        return result
+
+    except Exception as e:
+        # Sanitize error message to remove API keys
+        import re
+        error_msg = str(e)
+        error_msg = re.sub(r'(Bearer\s+)\S+', r'\1[REDACTED]', error_msg)
+        error_msg = re.sub(r'sk-[a-zA-Z0-9]{20,}', '[REDACTED]', error_msg)
+        print(f"Error querying {model}: {error_msg}")
+        return None
 
 
 async def _staggered_query(

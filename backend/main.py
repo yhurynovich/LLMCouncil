@@ -1,5 +1,6 @@
 """FastAPI backend for LLM Council."""
 
+from contextlib import asynccontextmanager
 from fastapi import FastAPI, HTTPException, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
@@ -16,6 +17,7 @@ from . import config as cfg
 from . import providers as prov
 from . import uploads
 from .llm_client import _get_proxy_url
+from .http_client import create_shared_client, close_shared_client
 from .council import (
     run_full_council,
     generate_conversation_title,
@@ -25,6 +27,22 @@ from .council import (
     calculate_aggregate_rankings,
 )
 
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Application lifespan manager for shared resources."""
+    # Startup: create shared HTTP client with connection pooling
+    create_shared_client(
+        timeout=120.0,
+        proxy=_get_proxy_url(),
+        max_keepalive_connections=20,
+        max_connections=100,
+    )
+    yield
+    # Shutdown: close shared HTTP client
+    await close_shared_client()
+
+
 app = FastAPI(
     title="LLM Council API",
     description="A multi-model LLM council system with OpenAI-compatible endpoints for Hermes integration.",
@@ -32,11 +50,16 @@ app = FastAPI(
     docs_url="/docs",
     redoc_url="/redoc",
     openapi_url="/openapi.json",
+    lifespan=lifespan,
 )
+
+# Restrict CORS to specific origins in production
+import os
+ALLOWED_ORIGINS = os.getenv("ALLOWED_ORIGINS", "http://localhost:5173,http://localhost:3000,http://192.168.31.66:5174").split(",")
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=ALLOWED_ORIGINS,
     allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -58,6 +81,8 @@ class SendMessageRequest(BaseModel):
     model_set: Optional[str] = None  # if provided, overrides active set for this request
     quick: bool = False  # skip Stage 2 & 3, return Stage 1 only
     files: List[FileAttachment] = []
+    temperature: Optional[float] = None
+    max_tokens: Optional[int] = None
 
 class SetModelSetRequest(BaseModel):
     set_id: str
@@ -171,8 +196,10 @@ async def root():
 @app.get("/api/model-sets", tags=["Model Sets"])
 async def list_model_sets():
     """Return all model sets and the currently active one."""
+    model_sets = await cfg.get_model_sets()
+    active_set = await cfg.get_active_model_set()
     sets = {}
-    for key, val in cfg.MODEL_SETS.items():
+    for key, val in model_sets.items():
         sets[key] = {
             "label": val["label"],
             "icon": val["icon"],
@@ -180,17 +207,17 @@ async def list_model_sets():
             "council": val["council"],
             "chairman": val["chairman"],
         }
-    return {"sets": sets, "active": cfg.ACTIVE_MODEL_SET}
+    return {"sets": sets, "active": active_set}
 
 
 @app.post("/api/model-sets/active", tags=["Model Sets"])
 async def set_active_model_set(request: SetModelSetRequest):
     """Switch the active model set."""
-    if request.set_id not in cfg.MODEL_SETS:
+    model_sets = await cfg.get_model_sets()
+    if request.set_id not in model_sets:
         raise HTTPException(status_code=400, detail=f"Unknown model set: {request.set_id}")
-    cfg.ACTIVE_MODEL_SET = request.set_id
-    cfg._save_active_model_set(request.set_id)
-    active = cfg.MODEL_SETS[request.set_id]
+    await cfg.set_active_model_set(request.set_id)
+    active = model_sets[request.set_id]
     return {
         "active": request.set_id,
         "label": active["label"],
@@ -205,27 +232,30 @@ async def create_model_set(request: CreateModelSetRequest):
     set_id = request.set_id.strip().lower().replace(" ", "-")
     if not set_id:
         raise HTTPException(status_code=400, detail="set_id is required")
-    if set_id in cfg.MODEL_SETS:
+    model_sets = await cfg.get_model_sets()
+    if set_id in model_sets:
         raise HTTPException(status_code=409, detail=f"Model set '{set_id}' already exists")
 
-    cfg.MODEL_SETS[set_id] = {
+    new_set = {
         "label": request.label,
         "icon": request.icon or request.label[:4].upper(),
         "description": request.description,
         "council": request.council,
         "chairman": request.chairman,
     }
-    cfg._save_model_sets(cfg.MODEL_SETS)
+    model_sets[set_id] = new_set
+    await cfg.set_model_sets(model_sets)
     return {"ok": True, "set_id": set_id}
 
 
 @app.put("/api/model-sets/{set_id}", tags=["Model Sets"])
 async def update_model_set(set_id: str, request: UpdateModelSetRequest):
     """Update an existing model set."""
-    if set_id not in cfg.MODEL_SETS:
+    model_sets = await cfg.get_model_sets()
+    if set_id not in model_sets:
         raise HTTPException(status_code=404, detail=f"Model set '{set_id}' not found")
 
-    ms = cfg.MODEL_SETS[set_id]
+    ms = model_sets[set_id]
     if request.label is not None:
         ms["label"] = request.label
     if request.icon is not None:
@@ -237,22 +267,24 @@ async def update_model_set(set_id: str, request: UpdateModelSetRequest):
     if request.chairman is not None:
         ms["chairman"] = request.chairman
 
-    cfg._save_model_sets(cfg.MODEL_SETS)
+    await cfg.set_model_sets(model_sets)
     return {"ok": True, "set_id": set_id}
 
 
 @app.delete("/api/model-sets/{set_id}", tags=["Model Sets"])
 async def delete_model_set(set_id: str):
     """Delete a model set. Built-in sets cannot be deleted."""
-    if set_id not in cfg.MODEL_SETS:
+    model_sets = await cfg.get_model_sets()
+    if set_id not in model_sets:
         raise HTTPException(status_code=404, detail=f"Model set '{set_id}' not found")
     if set_id in cfg.BUILTIN_SET_IDS:
         raise HTTPException(status_code=400, detail=f"Cannot delete built-in set '{set_id}'")
 
-    del cfg.MODEL_SETS[set_id]
-    if cfg.ACTIVE_MODEL_SET == set_id:
-        cfg.ACTIVE_MODEL_SET = "free"
-    cfg._save_model_sets(cfg.MODEL_SETS)
+    del model_sets[set_id]
+    active = await cfg.get_active_model_set()
+    if active == set_id:
+        await cfg.set_active_model_set("free")
+    await cfg.set_model_sets(model_sets)
     return {"ok": True}
 
 
@@ -260,8 +292,8 @@ async def delete_model_set(set_id: str):
 
 @app.get("/api/providers", tags=["Providers"])
 async def list_providers():
-    """Return all configured providers."""
-    return {"providers": prov.list_providers()}
+    """Return all configured providers with masked API keys."""
+    return {"providers": await prov.list_providers_async()}
 
 
 @app.post("/api/providers", tags=["Providers"])
@@ -270,52 +302,53 @@ async def create_provider(request: CreateProviderRequest):
     name = request.name.strip().lower().replace(" ", "-")
     if not name:
         raise HTTPException(status_code=400, detail="Provider name is required")
-    if name in prov.PROVIDERS:
+    providers = await prov.get_providers()
+    if name in providers:
         raise HTTPException(status_code=409, detail=f"Provider '{name}' already exists")
 
-    prov.PROVIDERS[name] = {
+    await prov.create_provider(name, {
         "base_url": request.base_url,
         "api_key": request.api_key,
         "api_key_env": request.api_key_env,
         "stream": request.stream,
         "description": request.description,
-    }
-    prov._save_providers(prov.PROVIDERS)
+    })
     return {"ok": True, "name": name}
 
 
 @app.put("/api/providers/{name}", tags=["Providers"])
 async def update_provider(name: str, request: UpdateProviderRequest):
     """Update an existing provider."""
-    if name not in prov.PROVIDERS:
+    providers = await prov.get_providers()
+    if name not in providers:
         raise HTTPException(status_code=404, detail=f"Provider '{name}' not found")
 
-    p = prov.PROVIDERS[name]
+    updates = {}
     if request.base_url is not None:
-        p["base_url"] = request.base_url
+        updates["base_url"] = request.base_url
     if request.api_key is not None:
-        p["api_key"] = request.api_key
+        updates["api_key"] = request.api_key
     if request.api_key_env is not None:
-        p["api_key_env"] = request.api_key_env
+        updates["api_key_env"] = request.api_key_env
     if request.stream is not None:
-        p["stream"] = request.stream
+        updates["stream"] = request.stream
     if request.description is not None:
-        p["description"] = request.description
+        updates["description"] = request.description
 
-    prov._save_providers(prov.PROVIDERS)
+    await prov.update_provider(name, updates)
     return {"ok": True, "name": name}
 
 
 @app.delete("/api/providers/{name}", tags=["Providers"])
 async def delete_provider(name: str):
     """Delete a provider. Cannot delete 'openrouter'."""
-    if name not in prov.PROVIDERS:
+    providers = await prov.get_providers()
+    if name not in providers:
         raise HTTPException(status_code=404, detail=f"Provider '{name}' not found")
     if name == "openrouter":
         raise HTTPException(status_code=400, detail="Cannot delete built-in 'openrouter' provider")
 
-    del prov.PROVIDERS[name]
-    prov._save_providers(prov.PROVIDERS)
+    await prov.delete_provider(name)
     return {"ok": True}
 
 
@@ -386,7 +419,8 @@ async def list_available_models():
     model_ctx = {m["id"]: m["context_length"] for m in all_models if m["context_length"] is not None}
 
     # Add model sets as selectable virtual models
-    for set_id, ms in cfg.MODEL_SETS.items():
+    model_sets = await cfg.get_model_sets()
+    for set_id, ms in model_sets.items():
         set_model_ids = ms["council"] + [ms["chairman"]]
         ctx_lengths = [model_ctx[mid] for mid in set_model_ids if mid in model_ctx]
         all_models.append({
@@ -411,7 +445,8 @@ async def openai_list_models():
     current_time = int(time.time())
     
     # Add model sets as models
-    for set_id, ms in cfg.MODEL_SETS.items():
+    model_sets = await cfg.get_model_sets()
+    for set_id, ms in model_sets.items():
         models.append(OpenAIModel(
             id=f"set/{set_id}",
             object="model",
@@ -470,44 +505,44 @@ async def openai_chat_completions(request: OpenAIChatCompletionRequest):
     import time
     import uuid
 
-    # Extract user message from messages list
-    user_message = ""
-    for msg in request.messages:
-        if msg.role == "user":
-            user_message = msg.content
-            break
-
-    if not user_message:
-        raise HTTPException(status_code=400, detail="No user message found")
+    # Extract ALL messages (not just the first user message) to preserve conversation history
+    if not request.messages:
+        raise HTTPException(status_code=400, detail="No messages provided")
 
     # Resolve model set
     set_id = request.model
     if set_id.startswith("set/"):
         set_id = set_id[4:]  # Remove "set/" prefix
 
-    if set_id not in cfg.MODEL_SETS:
-        set_id = cfg.ACTIVE_MODEL_SET
+    model_sets = await cfg.get_model_sets()
+    if set_id not in model_sets:
+        raise HTTPException(status_code=400, detail=f"Unknown model set: {request.model}")
 
-    # Validate model set exists
-    if set_id not in cfg.MODEL_SETS:
-        raise HTTPException(status_code=400, detail=f"Unknown model: {request.model}")
-
-    model_set = cfg.MODEL_SETS[set_id]
+    model_set = model_sets[set_id]
     council_models = model_set["council"]
     chairman_model = model_set["chairman"]
 
     async def run_council() -> str:
-        stage1_results = await stage1_collect_responses(user_message, council_models)
+        msgs = request.messages
+        stage1_results = await stage1_collect_responses(
+            msgs, council_models,
+            temperature=request.temperature,
+            max_tokens=request.max_tokens
+        )
 
         if not stage1_results or all(r.get("response") is None for r in stage1_results):
             return "All models failed to respond. Please try again."
 
         responding_models = [r["model"] for r in stage1_results if r.get("response") is not None]
         stage2_results, label_to_model = await stage2_collect_rankings(
-            user_message, stage1_results, responding_models
+            msgs, stage1_results, responding_models,
+            temperature=request.temperature,
+            max_tokens=request.max_tokens
         )
         stage3_result = await stage3_synthesize_final(
-            user_message, stage1_results, stage2_results, chairman_model
+            msgs, stage1_results, stage2_results, chairman_model,
+            temperature=request.temperature,
+            max_tokens=request.max_tokens
         )
         return stage3_result.get("response", "") if stage3_result else ""
 
@@ -582,19 +617,19 @@ async def upload_file(file: UploadFile = File(...)):
 
 @app.get("/api/conversations", response_model=List[ConversationMetadata], tags=["Conversations"])
 async def list_conversations():
-    return storage.list_conversations()
+    return await storage.list_conversations_async()
 
 
 @app.post("/api/conversations", response_model=Conversation, tags=["Conversations"])
 async def create_conversation(request: CreateConversationRequest):
     conversation_id = str(uuid.uuid4())
-    conversation = storage.create_conversation(conversation_id)
+    conversation = await storage.create_conversation_async(conversation_id)
     return conversation
 
 
 @app.get("/api/conversations/{conversation_id}", response_model=Conversation, tags=["Conversations"])
 async def get_conversation(conversation_id: str):
-    conversation = storage.get_conversation(conversation_id)
+    conversation = await storage.get_conversation_async(conversation_id)
     if conversation is None:
         raise HTTPException(status_code=404, detail="Conversation not found")
     return conversation
@@ -603,42 +638,46 @@ async def get_conversation(conversation_id: str):
 @app.put("/api/conversations/{conversation_id}", tags=["Conversations"])
 async def rename_conversation(conversation_id: str, request: RenameConversationRequest):
     """Rename a conversation."""
-    conversation = storage.get_conversation(conversation_id)
+    conversation = await storage.get_conversation_async(conversation_id)
     if conversation is None:
         raise HTTPException(status_code=404, detail="Conversation not found")
-    storage.update_conversation_title(conversation_id, request.title)
+    await storage.update_conversation_title_async(conversation_id, request.title)
     return {"ok": True, "title": request.title}
 
 
 @app.delete("/api/conversations/{conversation_id}", tags=["Conversations"])
 async def delete_conversation(conversation_id: str):
-    if not storage.delete_conversation(conversation_id):
+    if not await storage.delete_conversation_async(conversation_id):
         raise HTTPException(status_code=404, detail="Conversation not found")
     return {"ok": True}
 
 
 @app.post("/api/conversations/{conversation_id}/message/stream", tags=["Conversations"])
 async def send_message_stream(conversation_id: str, request: SendMessageRequest):
-    conversation = storage.get_conversation(conversation_id)
+    conversation = await storage.get_conversation_async(conversation_id)
     if conversation is None:
         raise HTTPException(status_code=404, detail="Conversation not found")
 
     is_first_message = len(conversation["messages"]) == 0
 
     # Resolve which model set to use for this request
-    set_id = request.model_set if request.model_set else cfg.ACTIVE_MODEL_SET
-    if set_id not in cfg.MODEL_SETS:
-        set_id = cfg.ACTIVE_MODEL_SET
-    model_set = cfg.MODEL_SETS[set_id]
+    set_id = request.model_set if request.model_set else await cfg.get_active_model_set()
+    model_sets = await cfg.get_model_sets()
+    if set_id not in model_sets:
+        set_id = await cfg.get_active_model_set()
+    model_set = model_sets[set_id]
     council_models = model_set["council"]
     chairman_model = model_set["chairman"]
+
+    # Build full message history including the new user message
+    messages = conversation["messages"] + [{"role": "user", "content": request.content}]
 
     async def event_generator():
         stage1_results = []
         stage2_results = []
         stage3_result = {}
         try:
-            storage.add_user_message(conversation_id, request.content)
+            await storage.add_user_message_async(conversation_id, request.content)
 
             # Emit which model set is being used
             yield f"data: {json.dumps({'type': 'model_set', 'data': {'set_id': set_id, 'label': model_set['label'], 'council': council_models, 'chairman': chairman_model}})}\n\n"
@@ -652,7 +691,7 @@ async def send_message_stream(conversation_id: str, request: SendMessageRequest)
             # Stage 1
             print(f"[STREAM] Stage 1 starting — set={set_id}, models={council_models}, quick={request.quick}, files={len(request.files)}", flush=True)
             yield f"data: {json.dumps({'type': 'stage1_start'})}\n\n"
-            stage1_results = await stage1_collect_responses(request.content, council_models, files=request.files)
+            stage1_results = await stage1_collect_responses(messages, council_models, files=request.files)
             print(f"[STREAM] Stage 1 complete: {len(stage1_results)} responses", flush=True)
             yield f"data: {json.dumps({'type': 'stage1_complete', 'data': stage1_results})}\n\n"
 
@@ -673,7 +712,9 @@ async def send_message_stream(conversation_id: str, request: SendMessageRequest)
                     return
 
                 stage2_results, label_to_model = await stage2_collect_rankings(
-                    request.content, stage1_results, responding_models
+                    messages, stage1_results, responding_models,
+                    temperature=request.temperature,
+                    max_tokens=request.max_tokens
                 )
                 aggregate_rankings = calculate_aggregate_rankings(stage2_results, label_to_model)
                 print(f"[STREAM] Stage 2 complete", flush=True)
@@ -683,7 +724,9 @@ async def send_message_stream(conversation_id: str, request: SendMessageRequest)
                 print(f"[STREAM] Stage 3 starting", flush=True)
                 yield f"data: {json.dumps({'type': 'stage3_start'})}\n\n"
                 stage3_result = await stage3_synthesize_final(
-                    request.content, stage1_results, stage2_results, chairman_model
+                    messages, stage1_results, stage2_results, chairman_model,
+                    temperature=request.temperature,
+                    max_tokens=request.max_tokens
                 )
                 print(f"[STREAM] Stage 3 complete", flush=True)
                 yield f"data: {json.dumps({'type': 'stage3_complete', 'data': stage3_result})}\n\n"
@@ -691,12 +734,12 @@ async def send_message_stream(conversation_id: str, request: SendMessageRequest)
             # Title
             if title_task:
                 title = await title_task
-                storage.update_conversation_title(conversation_id, title)
+                await storage.update_conversation_title_async(conversation_id, title)
                 yield f"data: {json.dumps({'type': 'title_complete', 'data': {'title': title}})}\n\n"
 
             # Save
             print(f"[STREAM] Saving to storage", flush=True)
-            storage.add_assistant_message(
+            await storage.add_assistant_message_async(
                 conversation_id, stage1_results, stage2_results, stage3_result
             )
             print(f"[STREAM] Saved successfully", flush=True)
@@ -708,7 +751,7 @@ async def send_message_stream(conversation_id: str, request: SendMessageRequest)
             print(f"[STREAM] ERROR: {e}\n{full_traceback}", flush=True)
             if stage1_results:
                 try:
-                    storage.add_assistant_message(
+                    await storage.add_assistant_message_async(
                         conversation_id, stage1_results, stage2_results, stage3_result
                     )
                     print(f"[STREAM] Partial save succeeded", flush=True)
@@ -721,69 +764,6 @@ async def send_message_stream(conversation_id: str, request: SendMessageRequest)
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "Connection": "keep-alive"},
     )
-
-
-# ── OpenAI-compatible endpoint (for Hermes / other OpenAI-style clients) ──────
-
-@app.post("/v1/chat/completions")
-async def openai_compat_chat_completions(request: OpenAIChatCompletionsRequest):
-    """
-    OpenAI-compatible shim so external tools (e.g. Hermes Agent) can call
-    a council as a single 'model'. Runs the full 3-stage council (all
-    members respond, then rank each other, then the chairman synthesizes)
-    and returns the chairman's final answer as a normal chat completion.
-
-    request.model selects which model set to use:
-      "council"            -> the active model set (currently "search")
-      "council-<set_id>"   -> e.g. "council-search", "council-smart"
-      "<set_id>"           -> also accepted directly, e.g. "search"
-      anything else        -> falls back to the active model set
-    """
-    user_messages = [m.content for m in request.messages if m.role == "user"]
-    if not user_messages:
-        raise HTTPException(status_code=400, detail="No user message found")
-    content = user_messages[-1]
-
-    set_id = cfg.ACTIVE_MODEL_SET
-    requested = (request.model or "").strip()
-    if requested.startswith("council-"):
-        candidate = requested[len("council-"):]
-        if candidate in cfg.MODEL_SETS:
-            set_id = candidate
-    elif requested in cfg.MODEL_SETS:
-        set_id = requested
-
-    model_set = cfg.MODEL_SETS[set_id]
-    council_models = model_set["council"]
-    chairman_model = model_set["chairman"]
-
-    try:
-        print(f"[V1] Council run starting — set={set_id}, models={council_models}", flush=True)
-        stage1_results = await stage1_collect_responses(content, council_models, files=[])
-        responding_models = [r["model"] for r in stage1_results]
-        stage2_results, label_to_model = await stage2_collect_rankings(
-            content, stage1_results, responding_models
-        )
-        stage3_result = await stage3_synthesize_final(
-            content, stage1_results, stage2_results, chairman_model
-        )
-        print(f"[V1] Council run complete — set={set_id}", flush=True)
-    except Exception as e:
-        full_traceback = traceback.format_exc()
-        print(f"[V1] ERROR: {e}\n{full_traceback}", flush=True)
-        raise HTTPException(status_code=500, detail=f"Council run failed: {e}")
-
-    final_text = stage3_result.get("response", "")
-
-    return {
-        "id": f"chatcmpl-council-{uuid.uuid4().hex[:12]}",
-        "object": "chat.completion",
-        "model": request.model,
-        "choices": [
-            {"index": 0, "message": {"role": "assistant", "content": final_text}, "finish_reason": "stop"}
-        ],
-        "usage": {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0},
-    }
 
 
 if __name__ == "__main__":

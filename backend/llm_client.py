@@ -4,11 +4,11 @@ import json
 import logging
 import os
 import time
-import httpx
 from typing import Any
 
 from .providers import get_provider, get_provider_api_key
 from .web_search import SEARCH_TOOL, handle_tool_call
+from .http_client import get_shared_client, create_shared_client
 
 logger = logging.getLogger(__name__)
 
@@ -48,6 +48,9 @@ async def query_model(
         logger.error("Unknown provider '%s' for model '%s'", provider_name, model)
         return None
 
+    # Extract timeout from kwargs, default to 120.0
+    timeout = kwargs.get("timeout", 120.0)
+
     api_key = get_provider_api_key(provider)
     base_url = provider["base_url"]
 
@@ -71,72 +74,87 @@ async def query_model(
         payload["tools"] = [SEARCH_TOOL]
         payload["tool_choice"] = "auto"
 
-    async with httpx.AsyncClient(timeout=120.0) as client:
-        try:
-            t0 = time.monotonic()
-            resp = await client.post(base_url, headers=headers, json=payload)
-            resp.raise_for_status()
-            data = resp.json()
+    # Pass temperature and max_tokens if provided
+    if "temperature" in kwargs:
+        payload["temperature"] = kwargs["temperature"]
+    if "max_tokens" in kwargs:
+        payload["max_tokens"] = kwargs["max_tokens"]
 
-            choices = data.get("choices")
-            if not choices:
-                logger.error("API returned no choices for model %s", model)
-                return {"error": "No choices in response"}
-            msg = choices[0].get("message", {})
+    # Use shared HTTP client for connection pooling
+    client = get_shared_client()
+    if client is None:
+        raise RuntimeError("Shared HTTP client not initialized. Ensure the FastAPI lifespan has started.")
+    
+    try:
+        t0 = time.monotonic()
+        resp = await client.post(base_url, headers=headers, json=payload, timeout=timeout)
+        resp.raise_for_status()
+        data = resp.json()
+
+        choices = data.get("choices")
+        if not choices:
+            logger.error("API returned no choices for model %s", model)
+            return {"error": "No choices in response"}
+        msg = choices[0].get("message", {})
+        if not isinstance(msg, dict):
+            return {"error": "Invalid message field in response"}
+
+        # Handle tool calls (OpenRouter only)
+        if enable_search and provider_name == "openrouter" and msg.get("tool_calls"):
+            tool_results = []
+            for tc in msg["tool_calls"]:
+                func = tc.get("function", {})
+                tool_name = func.get("name")
+                raw_args = func.get("arguments")
+                if not tool_name or not isinstance(raw_args, str):
+                    continue
+                try:
+                    tool_args = json.loads(raw_args)
+                except (json.JSONDecodeError, TypeError) as e:
+                    logger.warning("Failed to parse tool args for %s: %s", model, e)
+                    return {"error": f"Invalid tool call arguments: {e}"}
+
+                logger.info("[%s] search_web(%s)", model, tool_args.get('query', ''))
+                search_result = await handle_tool_call(tool_name, tool_args)
+                tool_results.append({
+                    "tool_call_id": tc["id"],
+                    "name": tool_name,
+                    "content": search_result,
+                })
+
+            second_messages = list(messages) + [
+                {"role": "assistant", "content": None, "tool_calls": msg["tool_calls"]},
+                *[{"role": "tool", **tr} for tr in tool_results],
+            ]
+            second_payload = {"model": api_model, "messages": second_messages}
+            resp2 = await client.post(base_url, headers=headers, json=second_payload, timeout=timeout)
+            resp2.raise_for_status()
+            data2 = resp2.json()
+            choices2 = data2.get("choices")
+            if not choices2:
+                return {"error": "No choices in tool-callback response"}
+            msg = choices2[0].get("message", {})
             if not isinstance(msg, dict):
-                return {"error": "Invalid message field in response"}
+                return {"error": "Invalid message in tool-callback response"}
 
-            # Handle tool calls (OpenRouter only)
-            if enable_search and provider_name == "openrouter" and msg.get("tool_calls"):
-                tool_results = []
-                for tc in msg["tool_calls"]:
-                    func = tc.get("function", {})
-                    tool_name = func.get("name")
-                    raw_args = func.get("arguments")
-                    if not tool_name or not isinstance(raw_args, str):
-                        continue
-                    try:
-                        tool_args = json.loads(raw_args)
-                    except (json.JSONDecodeError, TypeError) as e:
-                        logger.warning("Failed to parse tool args for %s: %s", model, e)
-                        return {"error": f"Invalid tool call arguments: {e}"}
+        elapsed = round(time.monotonic() - t0, 2)
+        content = msg.get("content") or ""
+        if not content.strip():
+            logger.warning("Empty response content from %s", model)
+            return {"error": "Model returned empty response"}
+        result: dict[str, Any] = {"content": content, "response_time": elapsed}
+        if "reasoning_details" in msg:
+            result["reasoning_details"] = msg["reasoning_details"]
+        return result
 
-                    logger.info("[%s] search_web(%s)", model, tool_args.get('query', ''))
-                    search_result = handle_tool_call(tool_name, tool_args)
-                    tool_results.append({
-                        "tool_call_id": tc["id"],
-                        "name": tool_name,
-                        "content": search_result,
-                    })
-
-                second_messages = list(messages) + [
-                    {"role": "assistant", "content": None, "tool_calls": msg["tool_calls"]},
-                    *[{"role": "tool", **tr} for tr in tool_results],
-                ]
-                second_payload = {"model": api_model, "messages": second_messages}
-                resp2 = await client.post(base_url, headers=headers, json=second_payload)
-                resp2.raise_for_status()
-                data2 = resp2.json()
-                choices2 = data2.get("choices")
-                if not choices2:
-                    return {"error": "No choices in tool-callback response"}
-                msg = choices2[0].get("message", {})
-                if not isinstance(msg, dict):
-                    return {"error": "Invalid message in tool-callback response"}
-
-            elapsed = round(time.monotonic() - t0, 2)
-            content = msg.get("content") or ""
-            if not content.strip():
-                logger.warning("Empty response content from %s", model)
-                return {"error": "Model returned empty response"}
-            result: dict[str, Any] = {"content": content, "response_time": elapsed}
-            if "reasoning_details" in msg:
-                result["reasoning_details"] = msg["reasoning_details"]
-            return result
-
-        except Exception as e:
-            logger.error("Error querying %s: %s", model, e)
-            return {"error": str(e)}
+    except Exception as e:
+        # Sanitize error message to remove API keys
+        import re
+        error_msg = str(e)
+        error_msg = re.sub(r'(Bearer\s+)\S+', r'\1[REDACTED]', error_msg)
+        error_msg = re.sub(r'sk-[a-zA-Z0-9]{20,}', '[REDACTED]', error_msg)
+        logger.error("Error querying %s: %s", model, error_msg)
+        return {"error": error_msg}
 
 
 async def _staggered_query(model, messages, enable_search, delay, **kwargs):
