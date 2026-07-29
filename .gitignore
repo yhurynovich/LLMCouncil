@@ -24,3 +24,4 @@ docs/compose/plans/2025-07-19-move-port-to-env.md
 /venv
 backend.log
 frontend.log
+/.mimocode/plans

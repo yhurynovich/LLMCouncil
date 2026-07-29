@@ -18,6 +18,27 @@ DEFAULT_PROVIDERS = {
         "stream": True,
         "description": "OpenRouter marketplace",
     },
+    "deepseek-free": {
+        "base_url": "http://192.168.31.66:8601/v1/chat/completions",
+        "api_key": "dummy-key",
+        "model": "deepseek-reasoner-search",
+        "stream": False,
+        "description": "DeepSeek Reasoner Search — local deployment",
+    },
+    "qwen-free": {
+        "base_url": "http://192.168.31.66:8600/api/chat/completions",
+        "api_key": "dummy-key",
+        "model": "qwen3.7-max",
+        "stream": False,
+        "description": "Qwen 3.7 Max — local deployment",
+    },
+    "glmkimi-free": {
+        "base_url": "http://192.168.31.66:3364/v1/chat/completions",
+        "api_key": "dummy-key",
+        "model": "kimi-k2.5",
+        "stream": False,
+        "description": "GLM Kimi K2.5 — local deployment",
+    },
 }
 
 
