@@ -43,7 +43,7 @@ async def query_model(
     **kwargs,
 ) -> dict[str, Any] | None:
     provider_name, model_id = _parse_model_id(model)
-    provider = get_provider(provider_name)
+    provider = await get_provider(provider_name)
     if provider is None:
         logger.error("Unknown provider '%s' for model '%s'", provider_name, model)
         return None

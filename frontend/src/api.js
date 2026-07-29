@@ -24,8 +24,8 @@ export const api = {
     return response.json();
   },
 
-  async getConversation(conversationId) {
-    const response = await fetch(`${API_BASE}/api/conversations/${conversationId}`);
+  async getConversation(conversationId, signal) {
+    const response = await fetch(`${API_BASE}/api/conversations/${conversationId}`, { signal });
     if (!response.ok) throw new Error('Failed to get conversation');
     return response.json();
   },
@@ -192,15 +192,17 @@ export const api = {
     const decoder = new TextDecoder();
     let buffer = '';
 
-    const processLine = (line) => {
-      const trimmed = line.trim();
-      if (trimmed.startsWith('data: ')) {
+    let eventData = '';
+
+    const flushEvent = () => {
+      if (eventData) {
         try {
-          const event = JSON.parse(trimmed.slice(6));
+          const event = JSON.parse(eventData);
           onEvent(event.type, event);
         } catch (e) {
-          console.error('Failed to parse SSE event:', e, trimmed);
+          console.error('SSE parse error:', e, eventData);
         }
+        eventData = '';
       }
     };
 
@@ -210,22 +212,27 @@ export const api = {
         if (done) break;
 
         buffer += decoder.decode(value, { stream: true });
-        const lines = buffer.split('\n');
-        buffer = lines.pop() || '';
-
-        for (const line of lines) {
-          processLine(line);
+        let eventEnd;
+        while ((eventEnd = buffer.indexOf('\n\n')) !== -1) {
+          const event = buffer.slice(0, eventEnd);
+          buffer = buffer.slice(eventEnd + 2);
+          const lines = event.split('\n');
+          for (const line of lines) {
+            if (line.startsWith('data:')) {
+              eventData += (eventData ? '\n' : '') + line.slice(5).trim();
+            }
+            // ignore event:, id:, retry: - we use JSON 'type' field instead
+          }
+          // Flush on blank line (end of SSE event)
+          flushEvent();
         }
-      }
-
-      if (buffer.trim().startsWith('data: ')) {
-        try {
-          const event = JSON.parse(buffer.trim().slice(6));
-          onEvent(event.type, event);
-        } catch { /* trailing garbage */ }
       }
     } finally {
       reader.cancel().catch(() => {});
+      // Process any remaining event
+      if (eventData) {
+        flushEvent();
+      }
     }
   },
 };

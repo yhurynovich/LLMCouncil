@@ -13,7 +13,9 @@ function deAnonymizeText(text, labelToModel) {
     const model = labelToModel[label];
     const modelShortName = (model?.split('/')[1] || model || 'Unknown').replace(/[*_~`[\]\\]/g, '');
     const escapedLabel = label.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-    result = result.replace(new RegExp(escapedLabel, 'g'), `**${modelShortName}**`);
+    // Escape $ characters in the replacement string to prevent regex injection
+    const safeReplacement = `**${modelShortName.replace(/\$/g, '$$$$')}**`;
+    result = result.replace(new RegExp(escapedLabel, 'g'), safeReplacement);
   }
   return result;
 }
@@ -24,6 +26,8 @@ export default function Stage2({ rankings, labelToModel, aggregateRankings }) {
   if (!rankings || !Array.isArray(rankings) || rankings.length === 0) {
     return null;
   }
+
+  const safeIndex = Math.min(activeTab, rankings.length - 1);
 
   return (
     <div className="stage stage2">
@@ -49,16 +53,16 @@ export default function Stage2({ rankings, labelToModel, aggregateRankings }) {
 
       <div className="tab-content">
         <div className="ranking-model">
-          {rankings[activeTab].model || 'Unknown'}
+          {rankings[safeIndex].model || 'Unknown'}
         </div>
         <div className="ranking-content markdown-content">
           <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeSanitize]}>
-            {deAnonymizeText(rankings[activeTab]?.ranking || '', labelToModel)}
+            {deAnonymizeText(rankings[safeIndex]?.ranking || '', labelToModel)}
           </ReactMarkdown>
         </div>
 
-        {rankings[activeTab]?.parsed_ranking &&
-         rankings[activeTab]?.parsed_ranking.length > 0 && (
+        {rankings[safeIndex]?.parsed_ranking &&
+         rankings[safeIndex]?.parsed_ranking.length > 0 && (
           <div className="parsed-ranking">
             <strong>Extracted Ranking:</strong>
             <ol>

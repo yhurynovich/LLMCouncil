@@ -17,9 +17,10 @@ export default function ModelSetSelector({ onSetChange }) {
       .then(({ sets, active }) => {
         setSets(sets);
         setActive(active);
+        onSetChange?.(active);
       })
       .catch(console.error);
-  }, []);
+  }, [onSetChange]);
 
   const handleSelect = async (setId) => {
     if (setId === active || saving) return;
@@ -35,7 +36,12 @@ export default function ModelSetSelector({ onSetChange }) {
     }
   };
 
-  if (!active) return null;
+  if (!active) {
+    if (!sets || Object.keys(sets).length === 0) {
+      return <div className="model-set-selector">Loading councils…</div>;
+    }
+    return null;
+  }
 
   return (
     <div className="model-set-selector">

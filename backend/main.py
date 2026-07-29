@@ -55,7 +55,7 @@ app = FastAPI(
 
 # Restrict CORS to specific origins in production
 import os
-ALLOWED_ORIGINS = os.getenv("ALLOWED_ORIGINS", "http://localhost:5173,http://localhost:3000,http://192.168.31.66:5174").split(",")
+ALLOWED_ORIGINS = os.getenv("ALLOWED_ORIGINS", "http://localhost:5173,http://localhost:3000,http://192.168.31.66:5173,http://192.168.31.66:5174").split(",")
 
 app.add_middleware(
     CORSMiddleware,
@@ -739,8 +739,13 @@ async def send_message_stream(conversation_id: str, request: SendMessageRequest)
 
             # Save
             print(f"[STREAM] Saving to storage", flush=True)
+            metadata = {}
+            if label_to_model:
+                metadata["label_to_model"] = label_to_model
+            if aggregate_rankings:
+                metadata["aggregate_rankings"] = aggregate_rankings
             await storage.add_assistant_message_async(
-                conversation_id, stage1_results, stage2_results, stage3_result
+                conversation_id, stage1_results, stage2_results, stage3_result, metadata
             )
             print(f"[STREAM] Saved successfully", flush=True)
 
@@ -751,8 +756,13 @@ async def send_message_stream(conversation_id: str, request: SendMessageRequest)
             print(f"[STREAM] ERROR: {e}\n{full_traceback}", flush=True)
             if stage1_results:
                 try:
+                    metadata = {}
+                    if label_to_model:
+                        metadata["label_to_model"] = label_to_model
+                    if aggregate_rankings:
+                        metadata["aggregate_rankings"] = aggregate_rankings
                     await storage.add_assistant_message_async(
-                        conversation_id, stage1_results, stage2_results, stage3_result
+                        conversation_id, stage1_results, stage2_results, stage3_result, metadata
                     )
                     print(f"[STREAM] Partial save succeeded", flush=True)
                 except Exception as save_err:

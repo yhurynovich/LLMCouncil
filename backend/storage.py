@@ -20,6 +20,9 @@ UUID_V4_REGEX = re.compile(r'^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f
 _conversation_locks: Dict[str, asyncio.Lock] = {}
 _locks_lock = asyncio.Lock()
 
+# Retention lock for thread-safe cleanup
+_retention_lock = asyncio.Lock()
+
 
 def ensure_data_dir():
     """Ensure the data directory exists."""
@@ -138,7 +141,7 @@ async def create_conversation_async(conversation_id: str) -> Dict[str, Any]:
     os.replace(tmp, path)
 
     # Enforce retention limit
-    enforce_retention()
+    await enforce_retention_async()
 
     return conversation
 
@@ -305,7 +308,8 @@ def add_assistant_message(
     conversation_id: str,
     stage1: List[Dict[str, Any]],
     stage2: List[Dict[str, Any]],
-    stage3: Dict[str, Any]
+    stage3: Dict[str, Any],
+    metadata: Dict[str, Any] = None
 ):
     """
     Add an assistant message with all 3 stages to a conversation.
@@ -315,17 +319,22 @@ def add_assistant_message(
         stage1: List of individual model responses
         stage2: List of model rankings
         stage3: Final synthesized response
+        metadata: Optional metadata (label_to_model, aggregate_rankings)
     """
     conversation = get_conversation(conversation_id)
     if conversation is None:
         raise ValueError(f"Conversation {conversation_id} not found")
 
-    conversation["messages"].append({
+    message = {
         "role": "assistant",
         "stage1": stage1,
         "stage2": stage2,
         "stage3": stage3
-    })
+    }
+    if metadata:
+        message["metadata"] = metadata
+
+    conversation["messages"].append(message)
 
     save_conversation(conversation)
     enforce_retention()
@@ -335,7 +344,8 @@ async def add_assistant_message_async(
     conversation_id: str,
     stage1: List[Dict[str, Any]],
     stage2: List[Dict[str, Any]],
-    stage3: Dict[str, Any]
+    stage3: Dict[str, Any],
+    metadata: Dict[str, Any] = None
 ):
     """Add an assistant message with all 3 stages asynchronously with lock."""
     lock = await _get_conversation_lock(conversation_id)
@@ -344,12 +354,16 @@ async def add_assistant_message_async(
         if conversation is None:
             raise ValueError(f"Conversation {conversation_id} not found")
 
-        conversation["messages"].append({
+        message = {
             "role": "assistant",
             "stage1": stage1,
             "stage2": stage2,
             "stage3": stage3
-        })
+        }
+        if metadata:
+            message["metadata"] = metadata
+
+        conversation["messages"].append(message)
 
         await save_conversation_async(conversation)
 

@@ -1,6 +1,7 @@
 """Shared HTTP client with connection pooling and lifespan management."""
 import asyncio
 import ipaddress
+import os
 import socket
 import threading
 from typing import Optional
@@ -20,9 +21,17 @@ PRIVATE_IP_RANGES = [
     ipaddress.ip_network("fe80::/10"),
 ]
 
+# Allowed IPs that bypass SSRF protection (comma-separated via env var)
+ALLOWED_IPS = set(
+    ip.strip() for ip in os.getenv("SSRF_ALLOWED_IPS", "192.168.31.66").split(",") if ip.strip()
+)
+
 
 def _is_private_ip(ip_str: str) -> bool:
     """Check if an IP address is in a private/internal range."""
+    # Allow explicitly whitelisted IPs
+    if ip_str in ALLOWED_IPS:
+        return False
     try:
         ip = ipaddress.ip_address(ip_str)
         for private_range in PRIVATE_IP_RANGES:

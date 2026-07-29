@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import Sidebar from './components/Sidebar';
 import ChatInterface from './components/ChatInterface';
 import ModelSetSelector from './components/ModelSetSelector';
@@ -12,13 +12,18 @@ function App() {
   const [currentConversation, setCurrentConversation] = useState(null);
   const [isLoading, setIsLoading] = useState(false);
   const [activeModelSet, setActiveModelSet] = useState(null);
-  const [view, setView] = useState('chat'); // 'chat' or 'manage-sets'
+  const [view, setView] = useState('chat');
   const [quickMode, setQuickMode] = useState(false);
-  const abortRef = useRef(null);
+  const streamController = useRef(null);
   const loadConvRef = useRef(0);
+  const debounceTimerRef = useRef(null);
 
   useEffect(() => {
     loadConversations();
+    // Initialize active model set from backend
+    api.listModelSets().then(({ active }) => {
+      setActiveModelSet(active);
+    }).catch(console.error);
   }, []);
 
   useEffect(() => {
@@ -26,28 +31,45 @@ function App() {
       setCurrentConversation(null);
       return;
     }
-    const reqId = ++loadConvRef.current;
-    let cancelled = false;
+    const ctrl = new AbortController();
     (async () => {
       try {
-        const conv = await api.getConversation(currentConversationId);
-        if (!cancelled && reqId === loadConvRef.current) {
+        const conv = await api.getConversation(currentConversationId, ctrl.signal);
+        if (!ctrl.signal.aborted) {
           setCurrentConversation(conv);
         }
       } catch (error) {
-        if (!cancelled && error.name !== 'AbortError' && reqId === loadConvRef.current) {
+        if (error.name !== 'AbortError' && !ctrl.signal.aborted) {
           console.error('Failed to load conversation:', error);
         }
       }
     })();
-    return () => { cancelled = true; };
+    return () => ctrl.abort();
   }, [currentConversationId]);
 
   useEffect(() => {
     return () => {
-      if (abortRef.current) {
-        abortRef.current.abort();
-        abortRef.current = null;
+      if (streamController.current) {
+        streamController.current.abort();
+      }
+    };
+  }, []);
+
+  // Abort stream when conversation changes
+  useEffect(() => {
+    return () => {
+      if (streamController.current) {
+        streamController.current.abort();
+        streamController.current = null;
+      }
+    };
+  }, [currentConversationId]);
+
+  // Cleanup debounce timer on unmount
+  useEffect(() => {
+    return () => {
+      if (debounceTimerRef.current) {
+        clearTimeout(debounceTimerRef.current);
       }
     };
   }, []);
@@ -60,6 +82,17 @@ function App() {
       console.error('Failed to load conversations:', error);
     }
   };
+
+  // Debounced version to prevent redundant API calls
+  const debouncedLoadConversations = useCallback((loadFn) => {
+    if (debounceTimerRef.current) {
+      clearTimeout(debounceTimerRef.current);
+    }
+    debounceTimerRef.current = setTimeout(() => {
+      loadFn();
+      debounceTimerRef.current = null;
+    }, 300);
+  }, []);
 
   const handleNewConversation = async () => {
     try {
@@ -101,43 +134,80 @@ function App() {
     }
   };
 
+  // Helper to update the last assistant message safely
+  const updateLastAssistantMessage = useCallback((updater) => {
+    setCurrentConversation((prev) => {
+      if (!prev?.messages?.length) return prev;
+      const messages = [...prev.messages];
+      const lastMsg = messages[messages.length - 1];
+      if (lastMsg?.role !== 'assistant') return prev;
+      messages[messages.length - 1] = updater(lastMsg);
+      return { ...prev, messages };
+    });
+  }, []);
+
   const handleStop = () => {
-    if (abortRef.current) {
-      abortRef.current.abort();
-      abortRef.current = null;
+    if (streamController.current) {
+      streamController.current.abort();
+      streamController.current = null;
     }
     setIsLoading(false);
+    // Mark the last assistant message as cancelled
+    setCurrentConversation((prev) => {
+      if (!prev?.messages?.length) return prev;
+      const messages = [...prev.messages];
+      const last = messages[messages.length - 1];
+      if (last?.role === 'assistant') {
+        messages[messages.length - 1] = { 
+          ...last, 
+          error: 'Request cancelled by user', 
+          loading: { stage1: false, stage2: false, stage3: false } 
+        };
+      }
+      return { ...prev, messages };
+    });
   };
 
   const handleSendMessage = async (content, files = []) => {
     if (!currentConversationId) return;
     setIsLoading(true);
 
+    // Ensure we have a valid model set (default to 'free' if none selected)
+    const modelSet = activeModelSet || 'free';
+
+    // Extract file IDs from attached files
+    const fileIds = files.map(f => f.file_id);
+
+    const userMessage = { role: 'user', content };
+    setCurrentConversation((prev) => ({
+      ...prev,
+      messages: [...(prev?.messages || []), userMessage],
+    }));
+
+    const assistantMessage = {
+      role: 'assistant',
+      stage1: null,
+      stage2: null,
+      stage3: null,
+      metadata: null,
+      modelSetInfo: null,
+      loading: { stage1: false, stage2: false, stage3: false },
+      error: null,
+    };
+
+    setCurrentConversation((prev) => ({
+      ...prev,
+      messages: [...(prev?.messages || []), assistantMessage],
+    }));
+
+    // Cancel any previous stream
+    if (streamController.current) {
+      streamController.current.abort();
+    }
     const controller = new AbortController();
-    abortRef.current = controller;
+    streamController.current = controller;
 
     try {
-      const userMessage = { role: 'user', content };
-      setCurrentConversation((prev) => ({
-        ...prev,
-        messages: [...(prev?.messages || []), userMessage],
-      }));
-
-      const assistantMessage = {
-        role: 'assistant',
-        stage1: null,
-        stage2: null,
-        stage3: null,
-        metadata: null,
-        modelSetInfo: null,
-        loading: { stage1: false, stage2: false, stage3: false },
-      };
-
-      setCurrentConversation((prev) => ({
-        ...prev,
-        messages: [...(prev?.messages || []), assistantMessage],
-      }));
-
       await api.sendMessageStream(
         currentConversationId,
         content,
@@ -145,87 +215,73 @@ function App() {
           switch (eventType) {
 
             case 'model_set':
-              setCurrentConversation((prev) => {
-                const messages = [...prev.messages];
-                const lastMsg = messages[messages.length - 1];
-                messages[messages.length - 1] = { ...lastMsg, modelSetInfo: event.data };
-                return { ...prev, messages };
-              });
+              updateLastAssistantMessage((lastMsg) => ({
+                ...lastMsg,
+                modelSetInfo: event.data,
+              }));
               break;
 
             case 'stage1_start':
-              setCurrentConversation((prev) => {
-                const messages = [...prev.messages];
-                const lastMsg = messages[messages.length - 1];
-                messages[messages.length - 1] = { ...lastMsg, loading: { ...lastMsg.loading, stage1: true } };
-                return { ...prev, messages };
-              });
+              updateLastAssistantMessage((lastMsg) => ({
+                ...lastMsg,
+                loading: { ...lastMsg.loading, stage1: true },
+              }));
               break;
 
             case 'stage1_complete':
-              setCurrentConversation((prev) => {
-                const messages = [...prev.messages];
-                const lastMsg = messages[messages.length - 1];
-                messages[messages.length - 1] = { ...lastMsg, stage1: event.data, loading: { ...lastMsg.loading, stage1: false } };
-                return { ...prev, messages };
-              });
+              updateLastAssistantMessage((lastMsg) => ({
+                ...lastMsg,
+                stage1: event.data,
+                loading: { ...lastMsg.loading, stage1: false },
+              }));
               break;
 
             case 'stage2_start':
-              setCurrentConversation((prev) => {
-                const messages = [...prev.messages];
-                const lastMsg = messages[messages.length - 1];
-                messages[messages.length - 1] = { ...lastMsg, loading: { ...lastMsg.loading, stage2: true } };
-                return { ...prev, messages };
-              });
+              updateLastAssistantMessage((lastMsg) => ({
+                ...lastMsg,
+                loading: { ...lastMsg.loading, stage2: true },
+              }));
               break;
 
             case 'stage2_complete':
-              setCurrentConversation((prev) => {
-                const messages = [...prev.messages];
-                const lastMsg = messages[messages.length - 1];
-                messages[messages.length - 1] = { ...lastMsg, stage2: event.data, metadata: event.metadata, loading: { ...lastMsg.loading, stage2: false } };
-                return { ...prev, messages };
-              });
+              updateLastAssistantMessage((lastMsg) => ({
+                ...lastMsg,
+                stage2: event.data,
+                metadata: event.metadata,
+                loading: { ...lastMsg.loading, stage2: false },
+              }));
               break;
 
             case 'stage3_start':
-              setCurrentConversation((prev) => {
-                const messages = [...prev.messages];
-                const lastMsg = messages[messages.length - 1];
-                messages[messages.length - 1] = { ...lastMsg, loading: { ...lastMsg.loading, stage3: true } };
-                return { ...prev, messages };
-              });
+              updateLastAssistantMessage((lastMsg) => ({
+                ...lastMsg,
+                loading: { ...lastMsg.loading, stage3: true },
+              }));
               break;
 
             case 'stage3_complete':
-              setCurrentConversation((prev) => {
-                const messages = [...prev.messages];
-                const lastMsg = messages[messages.length - 1];
-                messages[messages.length - 1] = { ...lastMsg, stage3: event.data, loading: { stage1: false, stage2: false, stage3: false } };
-                return { ...prev, messages };
-              });
-              loadConversations();
+              updateLastAssistantMessage((lastMsg) => ({
+                ...lastMsg,
+                stage3: event.data,
+                loading: { stage1: false, stage2: false, stage3: false },
+              }));
+              debouncedLoadConversations(loadConversations);
               break;
 
             case 'title_complete':
-              loadConversations();
+              debouncedLoadConversations(loadConversations);
               break;
 
             case 'complete':
-              loadConversations();
+              debouncedLoadConversations(loadConversations);
               break;
 
             case 'error':
               console.error('Stream error:', event.message);
-              setCurrentConversation((prev) => {
-                const messages = [...prev.messages];
-                const lastMsg = messages[messages.length - 1];
-                if (lastMsg?.loading) {
-                  messages[messages.length - 1] = { ...lastMsg, loading: { stage1: false, stage2: false, stage3: false } };
-                }
-                return { ...prev, messages };
-              });
+              updateLastAssistantMessage((lastMsg) => ({
+                ...lastMsg,
+                loading: { stage1: false, stage2: false, stage3: false },
+              }));
               break;
 
             default:
@@ -256,7 +312,9 @@ function App() {
         });
       }
     } finally {
-      abortRef.current = null;
+      if (streamController.current === controller) {
+        streamController.current = null;
+      }
       setIsLoading(false);
     }
   };
@@ -264,6 +322,7 @@ function App() {
   return (
     <div className="app">
       <Sidebar
+        key={conversations.length}
         conversations={conversations}
         currentConversationId={currentConversationId}
         onSelectConversation={(id) => {

@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
+import rehypeSanitize from 'rehype-sanitize';
 import Stage1 from './Stage1';
 import Stage2 from './Stage2';
 import Stage3 from './Stage3';
@@ -21,6 +22,7 @@ export default function ChatInterface({
   const messagesEndRef = useRef(null);
   const fileInputRef = useRef(null);
   const dragCounter = useRef(0);
+  const dragTimerRef = useRef(null);
 
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -37,6 +39,7 @@ export default function ChatInterface({
   const handleSubmit = (e) => {
     e.preventDefault();
     if ((input.trim() || attachedFiles.length > 0) && !isLoading) {
+      // Pass the full file objects (which include file_id)
       onSendMessage(input, attachedFiles);
       setInput('');
       setAttachedFiles([]);
@@ -78,16 +81,20 @@ export default function ChatInterface({
 
   const handleDragEnter = (e) => {
     e.preventDefault();
+    clearTimeout(dragTimerRef.current);
     if (++dragCounter.current === 1) setIsDragging(true);
   };
 
   const handleDragLeave = (e) => {
     e.preventDefault();
-    if (--dragCounter.current === 0) setIsDragging(false);
+    if (--dragCounter.current === 0) {
+      dragTimerRef.current = setTimeout(() => setIsDragging(false), 100);
+    }
   };
 
   const handleDrop = async (e) => {
     e.preventDefault();
+    clearTimeout(dragTimerRef.current);
     setIsDragging(false);
     dragCounter.current = 0;
     const files = Array.from(e.dataTransfer.files);
@@ -124,7 +131,7 @@ export default function ChatInterface({
                 <div className="user-message">
                   <div className="message-content">
                     <div className="markdown-content">
-                      <ReactMarkdown remarkPlugins={[remarkGfm]}>{msg.content}</ReactMarkdown>
+                      <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeSanitize]}>{msg.content}</ReactMarkdown>
                     </div>
                   </div>
                 </div>
@@ -161,6 +168,11 @@ export default function ChatInterface({
                     </div>
                   )}
                   {msg.stage3 && <Stage3 finalResponse={msg.stage3} />}
+                  {msg.error && (
+                    <div className="error-message" style={{color: '#dc2626', padding: '8px', border: '1px solid #dc2626', borderRadius: '4px', marginTop: '12px'}}>
+                      <p>❌ {msg.error}</p>
+                    </div>
+                  )}
                 </div>
               )}
             </div>
