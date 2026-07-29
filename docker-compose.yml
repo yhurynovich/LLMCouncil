@@ -1,0 +1,53 @@
+services:
+  searxng:
+    image: searxng/searxng:latest
+    container_name: llm-council-searxng
+    restart: unless-stopped
+    shm_size: 256m
+    ports:
+      - "5175:8080"               # access at http://<NAS-IP>:5175
+    volumes:
+      - ./searxng:/etc/searxng
+    environment:
+      - SEARXNG_BASE_URL=http://searxng:8080
+    networks:
+      - llm-council
+
+  backend:
+    build:
+      context: ./source
+      dockerfile: Dockerfile.backend
+    container_name: llm-council-backend
+    restart: unless-stopped
+    env_file:
+      - .env
+    volumes:
+      - ./data:/app/data
+      - ./data/model_sets.json:/app/data/model_sets.json
+      - ./data/providers.json:/app/data/providers.json
+      - ./data/active_model_set.json:/app/data/active_model_set.json
+      - ./data/conversations:/app/data/conversations
+      - ./data/uploads:/app/data/uploads
+    ports:
+      - "5174:8001"
+    networks:
+      - llm-council
+
+  frontend:
+    build:
+      context: ./source
+      dockerfile: Dockerfile.frontend
+      args:
+        VITE_API_URL: ""
+    container_name: llm-council-frontend
+    restart: unless-stopped
+    ports:
+      - "5173:80"
+    depends_on:
+      - backend
+    networks:
+      - llm-council
+
+networks:
+  llm-council:
+    driver: bridge

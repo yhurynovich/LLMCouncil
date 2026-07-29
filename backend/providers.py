@@ -13,6 +13,12 @@ PROVIDERS_FILE = "data/providers.json"
 
 DEFAULT_PROVIDERS = {
     "openrouter": {
+        "base_url": "https://192.168.31.66:4999/api/v1/chat/completions",
+        "api_key_env": "OPENROUTER_API_KEY",
+        "stream": True,
+        "description": "OpenRouter marketplace",
+    },
+    "openrouter_direct": {
         "base_url": "https://openrouter.ai/api/v1/chat/completions",
         "api_key_env": "OPENROUTER_API_KEY",
         "stream": True,
