@@ -297,3 +297,32 @@ export const api = {
 };
 
 export { api as default };
+
+export function isAuthenticated() {
+  return authCredentials !== null;
+}
+
+export function onAuthChange(callback) {
+  // For future use - could be expanded with event listeners
+  return () => {};
+}
+
+export function login(username, password) {
+  return fetchWithAuth(`${API_BASE}/api/conversations`, {
+    method: 'GET',
+  })
+    .then(response => {
+      if (response.status === 401) {
+        throw new Error('Invalid credentials');
+      }
+      if (!response.ok) {
+        throw new Error('Login failed');
+      }
+      setAuthCredentials(username, password);
+      return true;
+    });
+}
+
+export function logout() {
+  clearAuthCredentials();
+}
