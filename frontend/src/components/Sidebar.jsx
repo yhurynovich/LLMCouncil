@@ -10,6 +10,7 @@ export default function Sidebar({
   onRenameConversation,
   modelSetSelector,
   onManageSets,
+  onLogout,
 }) {
   const [deleteConfirm, setDeleteConfirm] = useState(null);
   const [editingId, setEditingId] = useState(null);
@@ -43,6 +44,9 @@ export default function Sidebar({
         <h1>LLM Council</h1>
         <button className="new-conversation-btn" onClick={onNewConversation}>
           + New Conversation
+        </button>
+        <button className="logout-btn" onClick={onLogout} title="Logout">
+          Logout
         </button>
       </div>
 
@@ -122,6 +126,9 @@ export default function Sidebar({
         {modelSetSelector}
         <button className="manage-sets-btn" onClick={onManageSets}>
           Manage Sets
+        </button>
+        <button className="logout-btn" onClick={onLogout}>
+          Logout
         </button>
       </div>
     </div>

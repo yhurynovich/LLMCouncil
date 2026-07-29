@@ -4,18 +4,77 @@
 const port = import.meta.env.VITE_BACKEND_PORT || '8001';
 const API_BASE = `${window.location.protocol}//${window.location.hostname}:${port}`;
 
+// Auth state
+let authCredentials = null;
+
+// Load credentials from sessionStorage on startup
+try {
+  const stored = sessionStorage.getItem('llm_council_auth');
+  if (stored) {
+    authCredentials = JSON.parse(stored);
+  }
+} catch (e) {
+  // Ignore parse errors
+}
+
+export function setAuthCredentials(username, password) {
+  authCredentials = { username, password };
+  sessionStorage.setItem('llm_council_auth', JSON.stringify({ username, password }));
+}
+
+export function clearAuthCredentials() {
+  authCredentials = null;
+  sessionStorage.removeItem('llm_council_auth');
+}
+
+export function getAuthCredentials() {
+  return authCredentials;
+}
+
+function getAuthHeader() {
+  if (authCredentials) {
+    const encoded = btoa(`${authCredentials.username}:${authCredentials.password}`);
+    return `Basic ${encoded}`;
+  }
+  return null;
+}
+
+async function fetchWithAuth(url, options = {}) {
+  const headers = {
+    ...options.headers,
+  };
+  
+  const authHeader = getAuthHeader();
+  if (authHeader) {
+    headers.Authorization = authHeader;
+  }
+  
+  const response = await fetch(url, {
+    ...options,
+    headers,
+  });
+  
+  // Handle 401 - clear credentials and notify
+  if (response.status === 401) {
+    clearAuthCredentials();
+    throw new Error('UNAUTHORIZED');
+  }
+  
+  return response;
+}
+
 export const api = {
 
   //  Conversations 
 
   async listConversations() {
-    const response = await fetch(`${API_BASE}/api/conversations`);
+    const response = await fetchWithAuth(`${API_BASE}/api/conversations`);
     if (!response.ok) throw new Error('Failed to list conversations');
     return response.json();
   },
 
   async createConversation() {
-    const response = await fetch(`${API_BASE}/api/conversations`, {
+    const response = await fetchWithAuth(`${API_BASE}/api/conversations`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({}),
@@ -25,13 +84,13 @@ export const api = {
   },
 
   async getConversation(conversationId, signal) {
-    const response = await fetch(`${API_BASE}/api/conversations/${conversationId}`, { signal });
+    const response = await fetchWithAuth(`${API_BASE}/api/conversations/${conversationId}`, { signal });
     if (!response.ok) throw new Error('Failed to get conversation');
     return response.json();
   },
 
   async deleteConversation(conversationId) {
-    const response = await fetch(`${API_BASE}/api/conversations/${conversationId}`, {
+    const response = await fetchWithAuth(`${API_BASE}/api/conversations/${conversationId}`, {
       method: 'DELETE',
     });
     if (!response.ok) throw new Error('Failed to delete conversation');
@@ -39,7 +98,7 @@ export const api = {
   },
 
   async renameConversation(conversationId, title) {
-    const response = await fetch(`${API_BASE}/api/conversations/${conversationId}`, {
+    const response = await fetchWithAuth(`${API_BASE}/api/conversations/${conversationId}`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ title }),
@@ -51,13 +110,13 @@ export const api = {
   //  Model Sets 
 
   async listModelSets() {
-    const response = await fetch(`${API_BASE}/api/model-sets`);
+    const response = await fetchWithAuth(`${API_BASE}/api/model-sets`);
     if (!response.ok) throw new Error('Failed to list model sets');
     return response.json(); // { sets: {...}, active: "free" }
   },
 
   async setActiveModelSet(setId) {
-    const response = await fetch(`${API_BASE}/api/model-sets/active`, {
+    const response = await fetchWithAuth(`${API_BASE}/api/model-sets/active`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ set_id: setId }),
@@ -67,7 +126,7 @@ export const api = {
   },
 
   async createModelSet(data) {
-    const response = await fetch(`${API_BASE}/api/model-sets`, {
+    const response = await fetchWithAuth(`${API_BASE}/api/model-sets`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(data),
@@ -80,7 +139,7 @@ export const api = {
   },
 
   async updateModelSet(setId, data) {
-    const response = await fetch(`${API_BASE}/api/model-sets/${encodeURIComponent(setId)}`, {
+    const response = await fetchWithAuth(`${API_BASE}/api/model-sets/${encodeURIComponent(setId)}`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(data),
@@ -93,7 +152,7 @@ export const api = {
   },
 
   async deleteModelSet(setId) {
-    const response = await fetch(`${API_BASE}/api/model-sets/${encodeURIComponent(setId)}`, {
+    const response = await fetchWithAuth(`${API_BASE}/api/model-sets/${encodeURIComponent(setId)}`, {
       method: 'DELETE',
     });
     if (!response.ok) {
@@ -104,7 +163,7 @@ export const api = {
   },
 
   async listAvailableModels() {
-    const response = await fetch(`${API_BASE}/api/available-models`);
+    const response = await fetchWithAuth(`${API_BASE}/api/available-models`);
     if (!response.ok) throw new Error('Failed to fetch available models');
     return response.json();
   },
@@ -112,13 +171,13 @@ export const api = {
   //  Providers
 
   async listProviders() {
-    const response = await fetch(`${API_BASE}/api/providers`);
+    const response = await fetchWithAuth(`${API_BASE}/api/providers`);
     if (!response.ok) throw new Error('Failed to list providers');
     return response.json();
   },
 
   async createProvider(data) {
-    const response = await fetch(`${API_BASE}/api/providers`, {
+    const response = await fetchWithAuth(`${API_BASE}/api/providers`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(data),
@@ -131,7 +190,7 @@ export const api = {
   },
 
   async updateProvider(name, data) {
-    const response = await fetch(`${API_BASE}/api/providers/${encodeURIComponent(name)}`, {
+    const response = await fetchWithAuth(`${API_BASE}/api/providers/${encodeURIComponent(name)}`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(data),
@@ -144,7 +203,7 @@ export const api = {
   },
 
   async deleteProvider(name) {
-    const response = await fetch(`${API_BASE}/api/providers/${encodeURIComponent(name)}`, {
+    const response = await fetchWithAuth(`${API_BASE}/api/providers/${encodeURIComponent(name)}`, {
       method: 'DELETE',
     });
     if (!response.ok) {
@@ -159,7 +218,7 @@ export const api = {
   async uploadFile(file) {
     const formData = new FormData();
     formData.append('file', file);
-    const response = await fetch(`${API_BASE}/api/upload`, {
+    const response = await fetchWithAuth(`${API_BASE}/api/upload`, {
       method: 'POST',
       body: formData,
     });
@@ -176,7 +235,7 @@ export const api = {
     const body = { content, quick, files };
     if (modelSet) body.model_set = modelSet;
 
-    const response = await fetch(
+    const response = await fetchWithAuth(
       `${API_BASE}/api/conversations/${conversationId}/message/stream`,
       {
         method: 'POST',
@@ -236,3 +295,5 @@ export const api = {
     }
   },
 };
+
+export { api as default };

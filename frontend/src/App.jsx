@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
+import AuthScreen from './components/AuthScreen';
 import Sidebar from './components/Sidebar';
 import ChatInterface from './components/ChatInterface';
 import ModelSetSelector from './components/ModelSetSelector';
@@ -14,17 +15,37 @@ function App() {
   const [activeModelSet, setActiveModelSet] = useState(null);
   const [view, setView] = useState('chat');
   const [quickMode, setQuickMode] = useState(false);
+  const [authenticated, setAuthenticated] = useState(false);
+  const [authError, setAuthError] = useState('');
   const streamController = useRef(null);
   const loadConvRef = useRef(0);
   const debounceTimerRef = useRef(null);
 
+  // Initialize auth state
   useEffect(() => {
+    const checkAuth = () => {
+      setAuthenticated(api.isAuthenticated());
+    };
+    
+    checkAuth();
+    
+    // Listen for auth changes
+    const unsubscribe = api.onAuthChange(() => {
+      checkAuth();
+    });
+    
+    return unsubscribe;
+  }, []);
+
+  useEffect(() => {
+    if (!authenticated) return;
+    
     loadConversations();
     // Initialize active model set from backend
     api.listModelSets().then(({ active }) => {
       setActiveModelSet(active);
     }).catch(console.error);
-  }, []);
+  }, [authenticated]);
 
   useEffect(() => {
     if (!currentConversationId) {
@@ -81,6 +102,31 @@ function App() {
     } catch (error) {
       console.error('Failed to load conversations:', error);
     }
+  };
+
+  const handleLogin = async (username, password) => {
+    setAuthError('');
+    try {
+      await api.login(username, password);
+      setAuthenticated(true);
+      setAuthError('');
+      // Reload conversations after successful login
+      loadConversations();
+      api.listModelSets().then(({ active }) => {
+        setActiveModelSet(active);
+      }).catch(console.error);
+    } catch (error) {
+      setAuthError('Invalid username or password');
+      throw error;
+    }
+  };
+
+  const handleLogout = () => {
+    api.logout();
+    setAuthenticated(false);
+    setConversations([]);
+    setCurrentConversationId(null);
+    setCurrentConversation(null);
   };
 
   // Debounced version to prevent redundant API calls
@@ -296,6 +342,9 @@ function App() {
     } catch (error) {
       if (error.name === 'AbortError') {
         // User cancelled — keep partial results
+      } else if (error.message === 'UNAUTHORIZED') {
+        // Auth expired, logout
+        handleLogout();
       } else {
         console.error('Failed to send message:', error);
         setCurrentConversation((prev) => {
@@ -319,8 +368,24 @@ function App() {
     }
   };
 
+  // Show login screen if not authenticated
+  if (!authenticated) {
+    return (
+      <AuthScreen 
+        onLogin={handleLogin} 
+        error={authError}
+      />
+    );
+  }
+
   return (
     <div className="app">
+      <div className="app-header">
+        <h1>🤝 LLM Council</h1>
+        <button className="logout-button" onClick={handleLogout}>
+          Logout
+        </button>
+      </div>
       <Sidebar
         key={conversations.length}
         conversations={conversations}
@@ -332,6 +397,7 @@ function App() {
         onNewConversation={handleNewConversation}
         onDeleteConversation={handleDeleteConversation}
         onRenameConversation={handleRenameConversation}
+        onLogout={handleLogout}
         modelSetSelector={
           <ModelSetSelector onSetChange={setActiveModelSet} />
         }
