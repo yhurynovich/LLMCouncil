@@ -42,6 +42,38 @@ def _is_private_ip(ip_str: str) -> bool:
     return False
 
 
+def _should_verify_ssl(base_url: str) -> bool:
+    """Check if SSL verification should be enabled for the given URL.
+    
+    Disable SSL verification for HTTP URLs to private/allowed IPs to avoid
+    SSL errors when connecting to local HTTP endpoints.
+    """
+    try:
+        parsed = urlparse(base_url)
+        if parsed.scheme != "http":
+            return True  # Verify SSL for HTTPS
+        host = parsed.hostname or ""
+        if not host:
+            return True
+        
+        # Allow explicitly whitelisted IPs
+        if host in ALLOWED_IPS:
+            return False
+        
+        # Check if host is a private IP
+        try:
+            ip = ipaddress.ip_address(host)
+            for private_range in PRIVATE_IP_RANGES:
+                if ip in private_range:
+                    return False
+        except ValueError:
+            # Not an IP address (could be hostname), verify SSL
+            pass
+    except Exception:
+        pass
+    return True
+
+
 class SSRFProtectionTransport(httpx.AsyncHTTPTransport):
     """Custom transport that validates IP addresses at connection time to prevent SSRF/DNS rebinding."""
     
@@ -86,13 +118,17 @@ class SSRFProtectionTransport(httpx.AsyncHTTPTransport):
             raise httpx.ConnectError(f"Could not resolve host: {host}")
 
 
-_shared_client: Optional[httpx.AsyncClient] = None
+# Shared clients - one with SSL verification, one without (for HTTP to private IPs)
+_shared_client_verify: Optional[httpx.AsyncClient] = None
+_shared_client_no_verify: Optional[httpx.AsyncClient] = None
 _client_lock = threading.Lock()
 
 
-def get_shared_client() -> Optional[httpx.AsyncClient]:
+def get_shared_client(verify_ssl: bool = True) -> Optional[httpx.AsyncClient]:
     """Get the shared HTTP client instance."""
-    return _shared_client
+    if verify_ssl:
+        return _shared_client_verify
+    return _shared_client_no_verify
 
 
 def create_shared_client(
@@ -102,27 +138,45 @@ def create_shared_client(
     proxy: Optional[str] = None,
 ) -> httpx.AsyncClient:
     """Create and set the shared HTTP client. Thread-safe."""
-    global _shared_client
+    global _shared_client_verify, _shared_client_no_verify
     with _client_lock:
-        if _shared_client is not None:
-            return _shared_client
-        _shared_client = httpx.AsyncClient(
+        if _shared_client_verify is not None:
+            return _shared_client_verify
+        
+        transport = SSRFProtectionTransport()
+        limits = httpx.Limits(
+            max_keepalive_connections=max_keepalive_connections,
+            max_connections=max_connections,
+        )
+        
+        # Client with SSL verification (for HTTPS)
+        _shared_client_verify = httpx.AsyncClient(
             timeout=timeout,
             proxy=proxy,
-            limits=httpx.Limits(
-                max_keepalive_connections=max_keepalive_connections,
-                max_connections=max_connections,
-            ),
+            limits=limits,
             trust_env=False,
-            transport=SSRFProtectionTransport(),
+            transport=transport,
         )
-        return _shared_client
+        
+        # Client without SSL verification (for HTTP to private IPs)
+        _shared_client_no_verify = httpx.AsyncClient(
+            timeout=timeout,
+            proxy=proxy,
+            limits=limits,
+            trust_env=False,
+            transport=transport,
+            verify=False,
+        )
+        return _shared_client_verify
 
 
 async def close_shared_client() -> None:
     """Close the shared HTTP client. Thread-safe."""
-    global _shared_client
+    global _shared_client_verify, _shared_client_no_verify
     with _client_lock:
-        if _shared_client is not None:
-            await _shared_client.aclose()
-            _shared_client = None
+        if _shared_client_verify is not None:
+            await _shared_client_verify.aclose()
+            _shared_client_verify = None
+        if _shared_client_no_verify is not None:
+            await _shared_client_no_verify.aclose()
+            _shared_client_no_verify = None

@@ -5,14 +5,49 @@ import logging
 import os
 import time
 from typing import Any
+from urllib.parse import urlparse
+
+import ipaddress
 
 from .providers import get_provider, get_provider_api_key
 from .web_search import SEARCH_TOOL, handle_tool_call
-from .http_client import get_shared_client, create_shared_client
+from .http_client import get_shared_client, create_shared_client, ALLOWED_IPS, PRIVATE_IP_RANGES
 
 logger = logging.getLogger(__name__)
 
 STAGGER_DELAY = 0.5
+
+
+def _should_verify_ssl(base_url: str) -> bool:
+    """Check if SSL verification should be enabled for the given URL.
+    
+    Disable SSL verification for HTTP URLs to private/allowed IPs to avoid
+    SSL errors when connecting to local HTTP endpoints.
+    """
+    try:
+        parsed = urlparse(base_url)
+        if parsed.scheme != "http":
+            return True  # Verify SSL for HTTPS
+        host = parsed.hostname or ""
+        if not host:
+            return True
+        
+        # Allow explicitly whitelisted IPs
+        if host in ALLOWED_IPS:
+            return False
+        
+        # Check if host is a private IP
+        try:
+            ip = ipaddress.ip_address(host)
+            for private_range in PRIVATE_IP_RANGES:
+                if ip in private_range:
+                    return False
+        except ValueError:
+            # Not an IP address (could be hostname), verify SSL
+            pass
+    except Exception:
+        pass
+    return True
 
 
 def _get_proxy_url() -> str | None:
@@ -80,8 +115,11 @@ async def query_model(
     if "max_tokens" in kwargs:
         payload["max_tokens"] = kwargs["max_tokens"]
 
-    # Use shared HTTP client for connection pooling
-    client = get_shared_client()
+    # Determine SSL verification based on URL (disable for HTTP to private IPs)
+    verify_ssl = _should_verify_ssl(base_url)
+    
+    # Use shared HTTP client for connection pooling (with appropriate SSL verification)
+    client = get_shared_client(verify_ssl=verify_ssl)
     if client is None:
         raise RuntimeError("Shared HTTP client not initialized. Ensure the FastAPI lifespan has started.")
     
