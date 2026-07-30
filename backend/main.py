@@ -66,8 +66,17 @@ app.add_middleware(
 )
 
 # ── Auth Middleware ────────────────────────────────────────────────────────────
-# Import at module level to access ALLOWED_IPS from http_client
-from .http_client import ALLOWED_IPS, _is_private_ip
+import ipaddress
+
+# Subnet(s) allowed to bypass login entirely (comma-separated CIDRs).
+# This is intentionally separate from http_client's SSRF-protection allowlist,
+# which serves an unrelated purpose (restricting outbound requests) and
+# shouldn't be reused for an inbound auth decision.
+AUTH_BYPASS_SUBNETS = [
+    ipaddress.ip_network(s.strip())
+    for s in os.getenv("AUTH_BYPASS_SUBNET", "192.168.31.0/24").split(",")
+    if s.strip()
+]
 
 # Load auth credentials from environment
 AUTH_USERNAME = os.getenv("AUTH_USERNAME", "admin")
@@ -164,46 +173,44 @@ class AuthMiddleware:
         await self._send_login_page(send)
     
     def _get_client_ip(self, scope) -> str:
-        """Extract client IP from scope."""
-        # Check X-Forwarded-For header
-        headers = dict(scope.get("headers", []))
-        forwarded = headers.get(b"x-forwarded-for")
-        if forwarded:
-            return forwarded.decode().split(",")[0].strip()
-        
-        # Check X-Real-IP header
-        real_ip = headers.get(b"x-real-ip")
-        if real_ip:
-            return real_ip.decode()
-        
-        # Fall back to client host
+        """Extract the client IP, trusting forwarded headers only when the
+        immediate TCP peer is itself a private-network address (i.e. our own
+        nginx container or Synology's reverse proxy relaying the request).
+        A forwarded header is otherwise attacker-controlled, so a request
+        arriving directly from a public IP is never allowed to claim a
+        different (e.g. spoofed local) address via X-Forwarded-For."""
         client = scope.get("client")
-        if client:
-            return client[0]
-        
-        return "unknown"
-    
+        raw_peer = client[0] if client else None
+
+        peer_is_private = False
+        if raw_peer:
+            try:
+                peer_is_private = ipaddress.ip_address(raw_peer).is_private
+            except ValueError:
+                pass
+
+        if peer_is_private:
+            headers = dict(scope.get("headers", []))
+            forwarded = headers.get(b"x-forwarded-for")
+            if forwarded:
+                return forwarded.decode().split(",")[0].strip()
+            real_ip = headers.get(b"x-real-ip")
+            if real_ip:
+                return real_ip.decode()
+
+        return raw_peer or "unknown"
+
     def _is_allowed_ip(self, ip: str) -> bool:
-        """Check if IP is in allowed list."""
+        """Check if the IP falls within AUTH_BYPASS_SUBNETS (default 192.168.31.0/24)."""
         if not ip or ip == "unknown":
             return False
-        
-        # Check exact match in ALLOWED_IPS
-        if ip in ALLOWED_IPS:
-            return True
-        
-        # Check if it's a private IP (local development)
+
         try:
-            if _is_private_ip(ip):
-                return True
-        except Exception:
-            pass
-        
-        # Check if it's localhost
-        if ip in ("127.0.0.1", "::1", "localhost"):
-            return True
-        
-        return False
+            addr = ipaddress.ip_address(ip)
+        except ValueError:
+            return False
+
+        return any(addr in net for net in AUTH_BYPASS_SUBNETS)
     
     def _parse_cookies(self, headers) -> dict:
         """Parse Cookie header."""
