@@ -45,9 +45,6 @@ export default function Sidebar({
         <button className="new-conversation-btn" onClick={onNewConversation}>
           + New Conversation
         </button>
-        <button className="logout-btn" onClick={onLogout} title="Logout">
-          Logout
-        </button>
       </div>
 
       <div className="conversation-list">

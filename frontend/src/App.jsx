@@ -380,12 +380,6 @@ function App() {
 
   return (
     <div className="app">
-      <div className="app-header">
-        <h1>🤝 LLM Council</h1>
-        <button className="logout-button" onClick={handleLogout}>
-          Logout
-        </button>
-      </div>
       <Sidebar
         key={conversations.length}
         conversations={conversations}

@@ -1,8 +1,16 @@
 /**
  * API client for the LLM Council backend.
+ *
+ * By default this uses relative paths (e.g. "/api/conversations"), so requests
+ * go to whatever origin served the page, and nginx's /api/ proxy (see
+ * Dockerfile.frontend) forwards them to the backend container internally.
+ * This works unmodified whether you're on the LAN IP, localhost, or a
+ * reverse-proxied domain like https://llmcouncil.htm.synology.me.
+ *
+ * Set VITE_API_URL at build time only if you need to point at a backend on a
+ * different host/port than the one serving the frontend.
  */
-const port = import.meta.env.VITE_BACKEND_PORT || '8001';
-const API_BASE = `${window.location.protocol}//${window.location.hostname}:${port}`;
+const API_BASE = import.meta.env.VITE_API_URL || '';
 
 // Auth state
 let authCredentials = null;
@@ -296,8 +304,6 @@ export const api = {
   },
 };
 
-export { api as default };
-
 export function isAuthenticated() {
   return authCredentials !== null;
 }
@@ -326,3 +332,12 @@ export function login(username, password) {
 export function logout() {
   clearAuthCredentials();
 }
+
+// App.jsx calls these as api.isAuthenticated() / api.onAuthChange() / api.login() / api.logout(),
+// so they need to live on the api object itself, not just as standalone named exports.
+api.isAuthenticated = isAuthenticated;
+api.onAuthChange = onAuthChange;
+api.login = login;
+api.logout = logout;
+
+export { api as default };

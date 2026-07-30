@@ -60,10 +60,6 @@ export default function AuthScreen({ onLogin, error }) {
             {loading ? 'Signing in...' : 'Sign In'}
           </button>
         </form>
-        
-        <p className="auth-hint">
-          Default credentials: <code>admin</code> / <code>changeme</code>
-        </p>
       </div>
     </div>
   );
