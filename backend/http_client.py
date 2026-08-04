@@ -21,16 +21,31 @@ PRIVATE_IP_RANGES = [
     ipaddress.ip_network("fe80::/10"),
 ]
 
-# Allowed IPs that bypass SSRF protection (comma-separated via env var)
-ALLOWED_IPS = set(
-    ip.strip() for ip in os.getenv("SSRF_ALLOWED_IPS", "192.168.31.66").split(",") if ip.strip()
-)
+# Allowed subnets that bypass SSRF protection (comma-separated CIDRs via env var)
+# Uses the same AUTH_BYPASS_SUBNET as inbound auth bypass for consistency
+ALLOWED_SUBNETS = [
+    ipaddress.ip_network(s.strip())
+    for s in os.getenv("AUTH_BYPASS_SUBNET", "192.168.31.0/24,127.0.0.1/32").split(",")
+    if s.strip()
+]
+
+
+def _is_ip_allowed(ip_str: str) -> bool:
+    """Check if an IP address is in any allowed subnet."""
+    try:
+        ip = ipaddress.ip_address(ip_str)
+        for subnet in ALLOWED_SUBNETS:
+            if ip in subnet:
+                return True
+    except ValueError:
+        pass
+    return False
 
 
 def _is_private_ip(ip_str: str) -> bool:
     """Check if an IP address is in a private/internal range."""
-    # Allow explicitly whitelisted IPs
-    if ip_str in ALLOWED_IPS:
+    # Allow explicitly whitelisted subnets
+    if _is_ip_allowed(ip_str):
         return False
     try:
         ip = ipaddress.ip_address(ip_str)
@@ -56,8 +71,8 @@ def _should_verify_ssl(base_url: str) -> bool:
         if not host:
             return True
         
-        # Allow explicitly whitelisted IPs
-        if host in ALLOWED_IPS:
+        # Allow explicitly whitelisted subnets
+        if _is_ip_allowed(host):
             return False
         
         # Check if host is a private IP

@@ -7,7 +7,7 @@ echo ""
 
 # Start backend
 echo "Starting backend on http://localhost:8001..."
-uv run python -m backend.main &
+/home/yury/Documents/LLMCouncil/venv/bin/python -m backend.main &
 BACKEND_PID=$!
 
 # Wait a bit for backend to start

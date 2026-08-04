@@ -69,12 +69,11 @@ app.add_middleware(
 import ipaddress
 
 # Subnet(s) allowed to bypass login entirely (comma-separated CIDRs).
-# This is intentionally separate from http_client's SSRF-protection allowlist,
-# which serves an unrelated purpose (restricting outbound requests) and
-# shouldn't be reused for an inbound auth decision.
+# Also used by http_client for SSRF protection bypass (outbound requests).
+# Any IP NOT in these subnets requires authentication.
 AUTH_BYPASS_SUBNETS = [
     ipaddress.ip_network(s.strip())
-    for s in os.getenv("AUTH_BYPASS_SUBNET", "192.168.31.0/24").split(",")
+    for s in os.getenv("AUTH_BYPASS_SUBNET", "192.168.31.0/24,127.0.0.1/32").split(",")
     if s.strip()
 ]
 

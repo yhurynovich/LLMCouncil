@@ -11,7 +11,7 @@ import ipaddress
 
 from .providers import get_provider, get_provider_api_key
 from .web_search import SEARCH_TOOL, handle_tool_call
-from .http_client import get_shared_client, create_shared_client, ALLOWED_IPS, PRIVATE_IP_RANGES
+from .http_client import get_shared_client, create_shared_client, _is_ip_allowed, PRIVATE_IP_RANGES
 
 logger = logging.getLogger(__name__)
 
@@ -32,8 +32,8 @@ def _should_verify_ssl(base_url: str) -> bool:
         if not host:
             return True
         
-        # Allow explicitly whitelisted IPs
-        if host in ALLOWED_IPS:
+        # Allow explicitly whitelisted subnets
+        if _is_ip_allowed(host):
             return False
         
         # Check if host is a private IP
