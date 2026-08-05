@@ -11,6 +11,7 @@ import json
 import asyncio
 import traceback
 import httpx
+import ipaddress
 
 from . import storage
 from . import config as cfg
@@ -57,6 +58,14 @@ app = FastAPI(
 import os
 ALLOWED_ORIGINS = os.getenv("ALLOWED_ORIGINS", "http://localhost:5173,http://localhost:3000,http://192.168.31.66:5173,http://192.168.31.66:5174").split(",")
 
+# Trusted proxy IPs that can forward X-Forwarded-For headers (comma-separated CIDRs)
+# This allows the auth middleware to extract the real client IP when behind a reverse proxy
+TRUSTED_PROXY_SUBNETS = [
+    ipaddress.ip_network(s.strip())
+    for s in os.getenv("TRUSTED_PROXY_SUBNET", "10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,127.0.0.0/8").split(",")
+    if s.strip()
+]
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=ALLOWED_ORIGINS,
@@ -66,7 +75,6 @@ app.add_middleware(
 )
 
 # ── Auth Middleware ────────────────────────────────────────────────────────────
-import ipaddress
 
 # Subnet(s) allowed to bypass login entirely (comma-separated CIDRs).
 # Also used by http_client for SSRF protection bypass (outbound requests).
@@ -173,22 +181,26 @@ class AuthMiddleware:
     
     def _get_client_ip(self, scope) -> str:
         """Extract the client IP, trusting forwarded headers only when the
-        immediate TCP peer is itself a private-network address (i.e. our own
-        nginx container or Synology's reverse proxy relaying the request).
+        immediate TCP peer is in TRUSTED_PROXY_SUBNETS (i.e. our own
+        nginx container or reverse proxy relaying the request).
         A forwarded header is otherwise attacker-controlled, so a request
-        arriving directly from a public IP is never allowed to claim a
+        arriving directly from an untrusted IP is never allowed to claim a
         different (e.g. spoofed local) address via X-Forwarded-For."""
         client = scope.get("client")
         raw_peer = client[0] if client else None
 
-        peer_is_private = False
+        peer_is_trusted = False
         if raw_peer:
             try:
-                peer_is_private = ipaddress.ip_address(raw_peer).is_private
+                peer_ip = ipaddress.ip_address(raw_peer)
+                for subnet in TRUSTED_PROXY_SUBNETS:
+                    if peer_ip in subnet:
+                        peer_is_trusted = True
+                        break
             except ValueError:
                 pass
 
-        if peer_is_private:
+        if peer_is_trusted:
             headers = dict(scope.get("headers", []))
             forwarded = headers.get(b"x-forwarded-for")
             if forwarded:
