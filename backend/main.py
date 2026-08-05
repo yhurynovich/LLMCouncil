@@ -147,15 +147,11 @@ class AuthMiddleware:
         # Get client IP
         client_ip = self._get_client_ip(scope)
         
-        # Skip auth for allowed IPs
-        if self._is_allowed_ip(client_ip):
-            await self.app(scope, receive, send)
-            return
-        
-        # Check for login endpoint
-        path = scope.get("path", "")
-        if path == "/login":
-            await self.app(scope, receive, send)
+        # Check for Basic Auth header FIRST (works even when reverse proxy can't forward headers)
+        auth_header = self._get_auth_header(scope.get("headers", []))
+        if auth_header and self._verify_basic_auth(auth_header):
+            # Valid Basic Auth - allow request and set session cookie
+            await self._send_with_cookie(scope, receive, send, True)
             return
         
         # Check for existing session cookie
@@ -164,11 +160,15 @@ class AuthMiddleware:
             await self.app(scope, receive, send)
             return
         
-        # Check for Basic Auth header
-        auth_header = self._get_auth_header(scope.get("headers", []))
-        if auth_header and self._verify_basic_auth(auth_header):
-            # Set session cookie and continue
-            await self._send_with_cookie(scope, receive, send, True)
+        # Skip auth for allowed IPs (only when no Basic Auth provided)
+        if self._is_allowed_ip(client_ip):
+            await self.app(scope, receive, send)
+            return
+        
+        # Check for login endpoint
+        path = scope.get("path", "")
+        if path == "/login":
+            await self.app(scope, receive, send)
             return
         
         # Require authentication
