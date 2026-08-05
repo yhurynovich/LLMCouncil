@@ -78,8 +78,8 @@ AUTH_BYPASS_SUBNETS = [
 ]
 
 # Load auth credentials from environment
-AUTH_USERNAME = os.getenv("AUTH_USERNAME", "admin")
-AUTH_PASSWORD = os.getenv("AUTH_PASSWORD", "changeme")
+AUTH_USERNAME = os.getenv("BASIC_AUTH_USERNAME", os.getenv("AUTH_USERNAME", "admin"))
+AUTH_PASSWORD = os.getenv("BASIC_AUTH_PASSWORD", os.getenv("AUTH_PASSWORD", "changeme"))
 
 # Login page HTML
 LOGIN_HTML = """

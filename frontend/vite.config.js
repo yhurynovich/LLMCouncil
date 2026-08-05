@@ -9,6 +9,13 @@ export default defineConfig({
       '/api': {
         target: 'http://127.0.0.1:8001',
         changeOrigin: true,
+        onProxyReq: (proxyReq, req) => {
+          // Forward original client IP to backend for authentication decisions
+          const clientIp = req.headers['x-forwarded-for'] || req.socket?.remoteAddress;
+          if (clientIp) {
+            proxyReq.setHeader('x-forwarded-for', clientIp);
+          }
+        },
       },
     },
   },
