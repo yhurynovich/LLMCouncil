@@ -111,7 +111,7 @@ async def _load_model_sets_async() -> Dict[str, Any]:
 
 
 async def _save_model_sets_async(sets: Dict[str, Any]) -> None:
-    """Persist model sets to disk atomically using async I/O."""
+    """Persist model sets to disk atomically using async I/O with fallback for filesystems that don't support os.replace."""
     parent = os.path.dirname(MODEL_SETS_FILE)
     if parent:
         os.makedirs(parent, exist_ok=True)
@@ -119,7 +119,11 @@ async def _save_model_sets_async(sets: Dict[str, Any]) -> None:
     import aiofiles
     async with aiofiles.open(tmp, "w") as f:
         await f.write(json.dumps(sets, indent=2))
-    os.replace(tmp, MODEL_SETS_FILE)
+    try:
+        os.replace(tmp, MODEL_SETS_FILE)
+    except OSError:
+        import shutil
+        shutil.move(tmp, MODEL_SETS_FILE)
 
 
 async def get_model_sets() -> Dict[str, Any]:
@@ -166,7 +170,7 @@ async def _load_active_model_set_async() -> str:
 
 
 async def _save_active_model_set_async(set_id: str) -> None:
-    """Persist active model set to disk atomically."""
+    """Persist active model set to disk atomically with fallback for filesystems that don't support os.replace."""
     parent = os.path.dirname(ACTIVE_MODEL_SET_FILE)
     if parent:
         os.makedirs(parent, exist_ok=True)
@@ -174,7 +178,12 @@ async def _save_active_model_set_async(set_id: str) -> None:
     import aiofiles
     async with aiofiles.open(tmp, "w") as f:
         await f.write(json.dumps({"set_id": set_id}))
-    os.replace(tmp, ACTIVE_MODEL_SET_FILE)
+    try:
+        os.replace(tmp, ACTIVE_MODEL_SET_FILE)
+    except OSError:
+        # Fallback for filesystems that don't support atomic replace (e.g., some network mounts)
+        import shutil
+        shutil.move(tmp, ACTIVE_MODEL_SET_FILE)
 
 
 async def get_active_model_set() -> str:
