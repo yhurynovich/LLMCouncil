@@ -18,8 +18,8 @@ services:
       context: ./source
       dockerfile: Dockerfile.backend
       args:
-        UID: ${UID:1026}
-        GID: ${GID:100}
+        UID: ${UID:-1026}
+        GID: ${GID:-100}
     container_name: llm-council-backend
     restart: unless-stopped
     env_file:
