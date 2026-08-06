@@ -12,6 +12,10 @@
  */
 const API_BASE = import.meta.env.VITE_API_URL || '';
 
+// Frontend credentials (injected at build time via VITE_ env vars)
+const FRONTEND_USERNAME = import.meta.env.VITE_AUTH_USERNAME || '';
+const FRONTEND_PASSWORD = import.meta.env.VITE_AUTH_PASSWORD || '';
+
 // Auth state
 let authCredentials = null;
 
@@ -23,6 +27,10 @@ try {
   }
 } catch (e) {
   // Ignore parse errors
+}
+
+function validateCredentials(username, password) {
+  return username === FRONTEND_USERNAME && password === FRONTEND_PASSWORD;
 }
 
 export function setAuthCredentials(username, password) {
@@ -39,34 +47,15 @@ export function getAuthCredentials() {
   return authCredentials;
 }
 
-function getAuthHeader() {
-  if (authCredentials) {
-    const encoded = btoa(`${authCredentials.username}:${authCredentials.password}`);
-    return `Basic ${encoded}`;
-  }
-  return null;
-}
-
 async function fetchWithAuth(url, options = {}) {
   const headers = {
     ...options.headers,
   };
   
-  const authHeader = getAuthHeader();
-  if (authHeader) {
-    headers.Authorization = authHeader;
-  }
-  
   const response = await fetch(url, {
     ...options,
     headers,
   });
-  
-  // Handle 401 - clear credentials and notify
-  if (response.status === 401) {
-    clearAuthCredentials();
-    throw new Error('UNAUTHORIZED');
-  }
   
   return response;
 }
@@ -314,19 +303,14 @@ export function onAuthChange(callback) {
 }
 
 export function login(username, password) {
-  return fetchWithAuth(`${API_BASE}/api/conversations`, {
-    method: 'GET',
-  })
-    .then(response => {
-      if (response.status === 401) {
-        throw new Error('Invalid credentials');
-      }
-      if (!response.ok) {
-        throw new Error('Login failed');
-      }
+  return new Promise((resolve, reject) => {
+    if (validateCredentials(username, password)) {
       setAuthCredentials(username, password);
-      return true;
-    });
+      resolve(true);
+    } else {
+      reject(new Error('Invalid credentials'));
+    }
+  });
 }
 
 export function logout() {

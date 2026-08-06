@@ -60,6 +60,18 @@ When you submit a query:
 - **OpenAPI documentation** — full API docs at `/docs`
 - **JSON storage** — conversations persisted in `data/conversations/`
 
+## Authentication
+
+The backend has **no authentication** — all API endpoints are publicly accessible.
+
+The frontend has **optional basic password protection** configured via environment variables:
+- Set `VITE_AUTH_USERNAME` and `VITE_AUTH_PASSWORD` in `.env`
+- These are bundled into the frontend build (via Vite's `VITE_` prefix)
+- If not set, the frontend is accessible without login
+- Credentials are validated client-side; no server-side session is created
+
+This design keeps the backend simple and API-first while allowing optional UI protection for deployments where needed.
+
 ## Setup
 
 ### 1. Install Dependencies
@@ -85,6 +97,11 @@ OPENROUTER_API_KEY=sk-or-v1-...
 
 # Optional — backend port (default: 8001)
 VITE_BACKEND_PORT=8001
+
+# Optional — frontend authentication (VITE_ prefix bundles into frontend build)
+# If set, the frontend will require these credentials to access the UI
+# VITE_AUTH_USERNAME=admin
+# VITE_AUTH_PASSWORD=changeme
 ```
 
 ### 3. Configure Providers (Optional)

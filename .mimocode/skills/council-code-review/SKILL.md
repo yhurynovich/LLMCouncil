@@ -58,7 +58,7 @@ python3 SKILL_DIR/scripts/council_review.py \
 ```
 
 - `--url`: Backend API endpoint (default: `http://192.168.31.66:5174/v1`)
-- `--model`: Model set name (default: `code`). Accepts: `code`, `search`, `free`, `smart`, `reasonable`, `privacy`, or any custom set_id. Also accepts `set/code` format.
+- `--model`: Model set name (default: `code`). Accepts: `code`, `search`. Also accepts `set/code` format.
 - `--code`: Code string to review (use when code is inline)
 - `--files`: Space-separated file paths to attach (reads content and includes in payload)
 - `--context`: Optional context/instructions for the review (e.g. "focus on security", "review for performance")

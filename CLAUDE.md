@@ -42,8 +42,15 @@ LLM Council is a 3-stage deliberation system where multiple LLMs collaboratively
 
 **`main.py`**
 - FastAPI app with CORS enabled for localhost:5173 and localhost:3000
+- **No authentication middleware** — all API endpoints are publicly accessible
 - POST `/api/conversations/{id}/message` returns metadata in addition to stages
 - Metadata includes: label_to_model mapping and aggregate_rankings
+
+### Frontend Authentication (Optional)
+- **`api.js`** — Client-side validation using `VITE_AUTH_USERNAME` / `VITE_AUTH_PASSWORD` (bundled at build time)
+- **`AuthScreen.jsx`** — Login UI shown only when credentials are configured
+- If VITE_ credentials not set, frontend is fully accessible without login
+- No server-side session or cookie handling — purely client-side gate
 
 ### Frontend Structure (`frontend/src/`)
 
@@ -131,6 +138,7 @@ Models are hardcoded in `backend/config.py`. Chairman can be same or different f
 2. **CORS Issues**: Frontend must match allowed origins in `main.py` CORS middleware
 3. **Ranking Parse Failures**: If models don't follow format, fallback regex extracts any "Response X" patterns in order
 4. **Missing Metadata**: Metadata is ephemeral (not persisted), only available in API responses
+5. **No Backend Auth**: Backend has no authentication — all API endpoints are public. Frontend auth is client-side only via VITE_ env vars.
 
 ## Future Enhancement Ideas
 

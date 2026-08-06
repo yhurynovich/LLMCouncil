@@ -1,9 +1,9 @@
 """FastAPI backend for LLM Council."""
 
 from contextlib import asynccontextmanager
-from fastapi import FastAPI, HTTPException, UploadFile, File, Form
+from fastapi import FastAPI, HTTPException, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse, Response
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from typing import List, Dict, Any, Optional
 import uuid
@@ -11,7 +11,6 @@ import json
 import asyncio
 import traceback
 import httpx
-import ipaddress
 
 from . import storage
 from . import config as cfg
@@ -58,14 +57,6 @@ app = FastAPI(
 import os
 ALLOWED_ORIGINS = os.getenv("ALLOWED_ORIGINS", "http://localhost:5173,http://localhost:3000,http://192.168.31.66:5173,http://192.168.31.66:5174").split(",")
 
-# Trusted proxy IPs that can forward X-Forwarded-For headers (comma-separated CIDRs)
-# This allows the auth middleware to extract the real client IP when behind a reverse proxy
-TRUSTED_PROXY_SUBNETS = [
-    ipaddress.ip_network(s.strip())
-    for s in os.getenv("TRUSTED_PROXY_SUBNET", "10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,127.0.0.0/8").split(",")
-    if s.strip()
-]
-
 app.add_middleware(
     CORSMiddleware,
     allow_origins=ALLOWED_ORIGINS,
@@ -74,220 +65,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# ── Auth Middleware ────────────────────────────────────────────────────────────
 
-# Subnet(s) allowed to bypass login entirely (comma-separated CIDRs).
-# Also used by http_client for SSRF protection bypass (outbound requests).
-# Any IP NOT in these subnets requires authentication.
-AUTH_BYPASS_SUBNETS = [
-    ipaddress.ip_network(s.strip())
-    for s in os.getenv("AUTH_BYPASS_SUBNET", "192.168.31.0/24,127.0.0.1/32").split(",")
-    if s.strip()
-]
-
-# Load auth credentials from environment
-AUTH_USERNAME = os.getenv("BASIC_AUTH_USERNAME", os.getenv("AUTH_USERNAME", "admin"))
-AUTH_PASSWORD = os.getenv("BASIC_AUTH_PASSWORD", os.getenv("AUTH_PASSWORD", "changeme"))
-
-# Login page HTML
-LOGIN_HTML = """
-<!DOCTYPE html>
-<html>
-<head>
-    <title>LLM Council - Authentication Required</title>
-    <meta charset="utf-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1">
-    <style>
-        body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; max-width: 400px; margin: 60px auto; padding: 20px; }
-        .card { background: white; border-radius: 8px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); padding: 32px; }
-        h1 { color: #333; margin-bottom: 8px; font-size: 24px; }
-        .subtitle { color: #666; margin-bottom: 24px; font-size: 14px; }
-        .form-group { margin-bottom: 16px; }
-        label { display: block; margin-bottom: 6px; font-weight: 500; color: #333; }
-        input { width: 100%; padding: 12px; border: 1px solid #ddd; border-radius: 6px; font-size: 16px; box-sizing: border-box; }
-        input:focus { outline: none; border-color: #4a90e2; box-shadow: 0 0 0 3px rgba(74,144,226,0.1); }
-        button { width: 100%; padding: 12px; background: #4a90e2; color: white; border: none; border-radius: 6px; font-size: 16px; font-weight: 600; cursor: pointer; }
-        button:hover { background: #357abd; }
-        .error { color: #dc2626; font-size: 14px; margin-top: 12px; text-align: center; }
-        .info { background: #f0f7ff; border: 1px solid #d0e7ff; border-radius: 6px; padding: 12px; margin-bottom: 20px; font-size: 13px; color: #2a7ae2; }
-    </style>
-</head>
-<body>
-    <div class="card">
-        <h1>🔐 Authentication Required</h1>
-        <p class="subtitle">Please enter your credentials to access LLM Council</p>
-        <div class="info">Your IP is not in the allowed list. Basic authentication is required.</div>
-        <form method="post" action="/login">
-            <div class="form-group">
-                <label for="username">Username</label>
-                <input type="text" id="username" name="username" required autocomplete="username">
-            </div>
-            <div class="form-group">
-                <label for="password">Password</label>
-                <input type="password" id="password" name="password" required autocomplete="current-password">
-            </div>
-            <button type="submit">Sign In</button>
-        </form>
-    </div>
-</body>
-</html>
-"""
-
-class AuthMiddleware:
-    """Middleware to enforce authentication for non-allowed IPs."""
-    
-    def __init__(self, app):
-        self.app = app
-    
-    async def __call__(self, scope, receive, send):
-        if scope["type"] != "http":
-            await self.app(scope, receive, send)
-            return
-        
-        # Get client IP
-        client_ip = self._get_client_ip(scope)
-        
-        # Check for Basic Auth header FIRST (works even when reverse proxy can't forward headers)
-        auth_header = self._get_auth_header(scope.get("headers", []))
-        if auth_header and self._verify_basic_auth(auth_header):
-            # Valid Basic Auth - allow request and set session cookie
-            await self._send_with_cookie(scope, receive, send, True)
-            return
-        
-        # Check for existing session cookie
-        cookies = self._parse_cookies(scope.get("headers", []))
-        if cookies.get("auth_token") == self._generate_token():
-            await self.app(scope, receive, send)
-            return
-        
-        # Skip auth for allowed IPs (only when no Basic Auth provided)
-        if self._is_allowed_ip(client_ip):
-            await self.app(scope, receive, send)
-            return
-        
-        # Check for login endpoint
-        path = scope.get("path", "")
-        if path == "/login":
-            await self.app(scope, receive, send)
-            return
-        
-        # Require authentication
-        if path.startswith("/docs") or path.startswith("/openapi") or path.startswith("/redoc"):
-            # Allow API docs without auth (optional)
-            pass
-        
-        # Return login page
-        await self._send_login_page(send)
-    
-    def _get_client_ip(self, scope) -> str:
-        """Extract the client IP, trusting forwarded headers only when the
-        immediate TCP peer is in TRUSTED_PROXY_SUBNETS (i.e. our own
-        nginx container or reverse proxy relaying the request).
-        A forwarded header is otherwise attacker-controlled, so a request
-        arriving directly from an untrusted IP is never allowed to claim a
-        different (e.g. spoofed local) address via X-Forwarded-For."""
-        client = scope.get("client")
-        raw_peer = client[0] if client else None
-
-        peer_is_trusted = False
-        if raw_peer:
-            try:
-                peer_ip = ipaddress.ip_address(raw_peer)
-                for subnet in TRUSTED_PROXY_SUBNETS:
-                    if peer_ip in subnet:
-                        peer_is_trusted = True
-                        break
-            except ValueError:
-                pass
-
-        if peer_is_trusted:
-            headers = dict(scope.get("headers", []))
-            forwarded = headers.get(b"x-forwarded-for")
-            if forwarded:
-                return forwarded.decode().split(",")[0].strip()
-            real_ip = headers.get(b"x-real-ip")
-            if real_ip:
-                return real_ip.decode()
-
-        return raw_peer or "unknown"
-
-    def _is_allowed_ip(self, ip: str) -> bool:
-        """Check if the IP falls within AUTH_BYPASS_SUBNETS (default 192.168.31.0/24)."""
-        if not ip or ip == "unknown":
-            return False
-
-        try:
-            addr = ipaddress.ip_address(ip)
-        except ValueError:
-            return False
-
-        return any(addr in net for net in AUTH_BYPASS_SUBNETS)
-    
-    def _parse_cookies(self, headers) -> dict:
-        """Parse Cookie header."""
-        cookies = {}
-        for name, value in headers:
-            if name == b"cookie":
-                cookie_str = value.decode()
-                for part in cookie_str.split(";"):
-                    if "=" in part:
-                        k, v = part.strip().split("=", 1)
-                        cookies[k] = v
-        return cookies
-    
-    def _get_auth_header(self, headers) -> str | None:
-        """Extract Authorization header."""
-        for name, value in headers:
-            if name == b"authorization":
-                return value.decode()
-        return None
-    
-    def _verify_basic_auth(self, auth_header: str) -> bool:
-        """Verify Basic Auth credentials."""
-        if not auth_header.startswith("Basic "):
-            return False
-        try:
-            import base64
-            credentials = base64.b64decode(auth_header[6:]).decode()
-            username, password = credentials.split(":", 1)
-            return username == AUTH_USERNAME and password == AUTH_PASSWORD
-        except Exception:
-            return False
-    
-    def _generate_token(self) -> str:
-        """Generate a simple session token."""
-        import hashlib
-        import time
-        return hashlib.sha256(f"{AUTH_USERNAME}:{AUTH_PASSWORD}:{int(time.time() // 3600)}".encode()).hexdigest()[:32]
-    
-    async def _send_with_cookie(self, scope, receive, send, set_cookie: bool):
-        """Send response with auth cookie."""
-        async def send_wrapper(message):
-            if message["type"] == "http.response.start" and set_cookie:
-                headers = list(message.get("headers", []))
-                token = self._generate_token()
-                headers.append((b"set-cookie", f"auth_token={token}; HttpOnly; SameSite=Lax; Path=/; Max-Age=86400".encode()))
-                message["headers"] = headers
-            await send(message)
-        await self.app(scope, receive, send_wrapper)
-    
-    async def _send_login_page(self, send):
-        """Send login page response."""
-        await send({
-            "type": "http.response.start",
-            "status": 401,
-            "headers": [
-                (b"content-type", b"text/html; charset=utf-8"),
-                (b"www-authenticate", b"Basic realm=\"LLM Council\""),
-            ],
-        })
-        await send({
-            "type": "http.response.body",
-            "body": LOGIN_HTML.encode(),
-        })
-
-
-app.add_middleware(AuthMiddleware)
 
 # ── Pydantic models ───────────────────────────────────────────────────────────
 
@@ -413,29 +191,6 @@ class OpenAIModelList(BaseModel):
 @app.get("/")
 async def root():
     return {"status": "ok", "service": "LLM Council API"}
-
-
-@app.post("/login")
-async def login(response: Response, username: str = Form(...), password: str = Form(...)):
-    """Handle login form submission."""
-    from .http_client import _is_private_ip
-    import hashlib
-    import time
-    
-    # Verify credentials
-    if username == AUTH_USERNAME and password == AUTH_PASSWORD:
-        token = hashlib.sha256(f"{AUTH_USERNAME}:{AUTH_PASSWORD}:{int(time.time() // 3600)}".encode()).hexdigest()[:32]
-        response.set_cookie(
-            key="auth_token",
-            value=token,
-            httponly=True,
-            samesite="lax",
-            path="/",
-            max_age=86400,  # 24 hours
-        )
-        return {"ok": True, "redirect": "/"}
-    
-    raise HTTPException(status_code=401, detail="Invalid credentials")
 
 
 # ── Model Sets ────────────────────────────────────────────────────────────────
