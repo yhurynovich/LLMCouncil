@@ -99,7 +99,7 @@ async def query_model(
         headers["HTTP-Referer"] = "https://llm-council.local"
         headers["X-Title"] = "LLM Council"
 
-    api_model = provider.get("model", model_id)
+    api_model = model_id
     payload: dict[str, Any] = {
         "model": api_model,
         "messages": messages,
