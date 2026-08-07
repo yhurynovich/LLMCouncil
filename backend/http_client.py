@@ -21,11 +21,11 @@ PRIVATE_IP_RANGES = [
     ipaddress.ip_network("fe80::/10"),
 ]
 
-# Allowed subnets that bypass SSRF protection (comma-separated CIDRs via env var)
-# Uses the same AUTH_BYPASS_SUBNET as inbound auth bypass for consistency
-ALLOWED_SUBNETS = [
+# Allowed subnets that bypass SSRF protection for OUTBOUND requests (comma-separated CIDRs via env var)
+# Separate from inbound AUTH_BYPASS_SUBNET for security
+OUTBOUND_ALLOWED_SUBNETS = [
     ipaddress.ip_network(s.strip())
-    for s in os.getenv("AUTH_BYPASS_SUBNET", "192.168.31.0/24,127.0.0.1/32").split(",")
+    for s in os.getenv("OUTBOUND_ALLOWED_SUBNETS", "192.168.31.0/24,127.0.0.1/32,10.0.0.0/8,172.16.0.0/12").split(",")
     if s.strip()
 ]
 
@@ -34,7 +34,7 @@ def _is_ip_allowed(ip_str: str) -> bool:
     """Check if an IP address is in any allowed subnet."""
     try:
         ip = ipaddress.ip_address(ip_str)
-        for subnet in ALLOWED_SUBNETS:
+        for subnet in OUTBOUND_ALLOWED_SUBNETS:
             if ip in subnet:
                 return True
     except ValueError:

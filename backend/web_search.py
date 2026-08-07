@@ -9,6 +9,33 @@ import httpx
 
 SEARXNG_URL = os.getenv("SEARXNG_URL", "http://searxng:8080/search")
 
+# Shared client for connection pooling
+_searxng_client: httpx.AsyncClient | None = None
+_searxng_client_lock = __import__("threading").Lock()
+
+
+def _get_searxng_client() -> httpx.AsyncClient:
+    """Get or create shared SearXNG client with connection pooling."""
+    global _searxng_client
+    with _searxng_client_lock:
+        if _searxng_client is None:
+            _searxng_client = httpx.AsyncClient(
+                timeout=15.0,
+                limits=httpx.Limits(max_keepalive_connections=5, max_connections=10),
+                trust_env=False,
+            )
+        return _searxng_client
+
+
+async def close_searxng_client() -> None:
+    """Close the shared SearXNG client."""
+    global _searxng_client
+    with _searxng_client_lock:
+        if _searxng_client is not None:
+            import asyncio
+            asyncio.create_task(_searxng_client.aclose())
+            _searxng_client = None
+
 SEARCH_TOOL = {
     "type": "function",
     "function": {
@@ -35,20 +62,20 @@ SEARCH_TOOL = {
 async def searxng_search(query: str, max_results: int = 5) -> str:
     """Query the local SearXNG instance and return plain-text results."""
     try:
-        async with httpx.AsyncClient(timeout=15.0) as client:
-            resp = await client.get(
-                SEARXNG_URL,
-                params={
-                    "q": query,
-                    "format": "json",
-                    "language": "en",
-                    "time_range": "",
-                    "safesearch": "0",
-                },
-                headers={"User-Agent": "llm-council/1.0"},
-            )
-            resp.raise_for_status()
-            data = resp.json()
+        client = _get_searxng_client()
+        resp = await client.get(
+            SEARXNG_URL,
+            params={
+                "q": query,
+                "format": "json",
+                "language": "en",
+                "time_range": "",
+                "safesearch": "0",
+            },
+            headers={"User-Agent": "llm-council/1.0"},
+        )
+        resp.raise_for_status()
+        data = resp.json()
 
         results = data.get("results", [])[:max_results]
         if not results:

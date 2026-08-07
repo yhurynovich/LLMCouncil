@@ -1,7 +1,7 @@
 """FastAPI backend for LLM Council."""
 
 from contextlib import asynccontextmanager
-from fastapi import FastAPI, HTTPException, UploadFile, File
+from fastapi import FastAPI, HTTPException, UploadFile, File, Header
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
@@ -11,6 +11,14 @@ import json
 import asyncio
 import traceback
 import httpx
+import re
+
+# UUID v4 regex for validation
+UUID_V4_REGEX = re.compile(r'^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$', re.IGNORECASE)
+
+def _is_valid_uuid(uuid_str: str) -> bool:
+    """Check if string is a valid UUID v4."""
+    return bool(UUID_V4_REGEX.match(uuid_str))
 
 from . import storage
 from . import config as cfg
@@ -26,6 +34,7 @@ from .council import (
     stage3_synthesize_final,
     calculate_aggregate_rankings,
 )
+from .web_search import close_searxng_client
 
 
 @asynccontextmanager
@@ -41,6 +50,8 @@ async def lifespan(app: FastAPI):
     yield
     # Shutdown: close shared HTTP client
     await close_shared_client()
+    # Shutdown: close SearXNG client
+    await close_searxng_client()
 
 
 app = FastAPI(
@@ -495,7 +506,7 @@ async def openai_list_models():
 
 
 @app.post("/v1/chat/completions", tags=["OpenAI Compatible"])
-async def openai_chat_completions(request: OpenAIChatCompletionRequest):
+async def openai_chat_completions(request: OpenAIChatCompletionRequest, x_session_id: str | None = Header(default=None)):
     """Create a chat completion using the LLM Council in OpenAI-compatible format.
 
     Supports both stream=false (single JSON response) and stream=true
@@ -527,25 +538,33 @@ async def openai_chat_completions(request: OpenAIChatCompletionRequest):
     async def run_council() -> str:
         # Convert Pydantic models to dicts for JSON serialization
         msgs = [msg.model_dump() for msg in request.messages]
-        stage1_results = await stage1_collect_responses(
+        # Use X-Session-ID as conversation_id for session tracking (if valid UUID)
+        conversation_id = x_session_id if x_session_id and _is_valid_uuid(x_session_id) else None
+        stage1_results, session_ids = await stage1_collect_responses(
             msgs, council_models,
             temperature=request.temperature,
-            max_tokens=request.max_tokens
+            max_tokens=request.max_tokens,
+            conversation_id=conversation_id
         )
 
         if not stage1_results or all(r.get("response") is None for r in stage1_results):
             return "All models failed to respond. Please try again."
 
         responding_models = [r["model"] for r in stage1_results if r.get("response") is not None]
-        stage2_results, label_to_model = await stage2_collect_rankings(
+        stage2_results, label_to_model, ranking_session_ids = await stage2_collect_rankings(
             msgs, stage1_results, responding_models,
             temperature=request.temperature,
-            max_tokens=request.max_tokens
+            max_tokens=request.max_tokens,
+            conversation_id=conversation_id,
+            session_ids=session_ids
         )
+        all_session_ids = {**session_ids, **ranking_session_ids}
         stage3_result = await stage3_synthesize_final(
             msgs, stage1_results, stage2_results, chairman_model,
             temperature=request.temperature,
-            max_tokens=request.max_tokens
+            max_tokens=request.max_tokens,
+            conversation_id=conversation_id,
+            session_ids=all_session_ids
         )
         return stage3_result.get("response", "") if stage3_result else ""
 
@@ -730,10 +749,10 @@ async def send_message_stream(conversation_id: str, request: SendMessageRequest)
             print(f"[STREAM] Stage 1 starting — set={set_id}, models={council_models}, quick={request.quick}, files={len(request.files)}", flush=True)
             yield f"data: {json.dumps({'type': 'stage1_start'})}\n\n"
             async for item in _with_heartbeat(
-                stage1_collect_responses(messages, council_models, files=request.files)
+                stage1_collect_responses(messages, council_models, files=request.files, conversation_id=conversation_id)
             ):
                 if isinstance(item, asyncio.Task):
-                    stage1_results = item.result()
+                    stage1_results, session_ids = item.result()
                 else:
                     yield item
             print(f"[STREAM] Stage 1 complete: {len(stage1_results)} responses", flush=True)
@@ -759,11 +778,13 @@ async def send_message_stream(conversation_id: str, request: SendMessageRequest)
                     stage2_collect_rankings(
                         messages, stage1_results, responding_models,
                         temperature=request.temperature,
-                        max_tokens=request.max_tokens
+                        max_tokens=request.max_tokens,
+                        conversation_id=conversation_id,
+                        session_ids=session_ids
                     )
                 ):
                     if isinstance(item, asyncio.Task):
-                        stage2_results, label_to_model = item.result()
+                        stage2_results, label_to_model, ranking_session_ids = item.result()
                     else:
                         yield item
                 aggregate_rankings = calculate_aggregate_rankings(stage2_results, label_to_model)
@@ -773,11 +794,15 @@ async def send_message_stream(conversation_id: str, request: SendMessageRequest)
                 # Stage 3
                 print(f"[STREAM] Stage 3 starting", flush=True)
                 yield f"data: {json.dumps({'type': 'stage3_start'})}\n\n"
+                # Merge session_ids for chairman
+                all_session_ids = {**session_ids, **ranking_session_ids}
                 async for item in _with_heartbeat(
                     stage3_synthesize_final(
                         messages, stage1_results, stage2_results, chairman_model,
                         temperature=request.temperature,
-                        max_tokens=request.max_tokens
+                        max_tokens=request.max_tokens,
+                        conversation_id=conversation_id,
+                        session_ids=all_session_ids
                     )
                 ):
                     if isinstance(item, asyncio.Task):

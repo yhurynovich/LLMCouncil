@@ -4,6 +4,7 @@ import json
 import logging
 import os
 import time
+import uuid
 from typing import Any
 from urllib.parse import urlparse
 
@@ -75,6 +76,7 @@ async def query_model(
     model: str,
     messages: list,
     enable_search: bool = True,
+    session_id: str = None,
     **kwargs,
 ) -> dict[str, Any] | None:
     provider_name, model_id = _parse_model_id(model)
@@ -98,12 +100,23 @@ async def query_model(
     if provider_name == "openrouter":
         headers["HTTP-Referer"] = "https://llm-council.local"
         headers["X-Title"] = "LLM Council"
+        # Client-driven session tracking headers (forwarded to OpenRouter for observability)
+        if session_id:
+            headers["X-Session-ID"] = session_id
+            headers["X-Conversation-ID"] = session_id
+        # Request ID for distributed tracing
+        headers["X-Request-ID"] = str(uuid.uuid4())
 
     api_model = model_id
     payload: dict[str, Any] = {
         "model": api_model,
         "messages": messages,
     }
+
+    # Add session_id if provider supports sessions and we have one
+    if provider.get("session_support") and session_id:
+        session_param = provider.get("session_param", "session_id")
+        payload[session_param] = session_id
 
     if enable_search and provider_name == "openrouter":
         payload["tools"] = [SEARCH_TOOL]
@@ -165,7 +178,15 @@ async def query_model(
                 *[{"role": "tool", **tr} for tr in tool_results],
             ]
             second_payload = {"model": api_model, "messages": second_messages}
-            resp2 = await client.post(base_url, headers=headers, json=second_payload, timeout=timeout)
+            # Also include session_id in tool callback if supported
+            if provider.get("session_support") and session_id:
+                session_param = provider.get("session_param", "session_id")
+                second_payload[session_param] = session_id
+            
+            # New request ID for the second call
+            second_headers = dict(headers)
+            second_headers["X-Request-ID"] = str(uuid.uuid4())
+            resp2 = await client.post(base_url, headers=second_headers, json=second_payload, timeout=timeout)
             resp2.raise_for_status()
             data2 = resp2.json()
             choices2 = data2.get("choices")
@@ -195,20 +216,23 @@ async def query_model(
         return {"error": error_msg}
 
 
-async def _staggered_query(model, messages, enable_search, delay, **kwargs):
+async def _staggered_query(model, messages, enable_search, delay, session_id=None, **kwargs):
     if delay > 0:
         await asyncio.sleep(delay)
-    return await query_model(model, messages, enable_search=enable_search, **kwargs)
+    return await query_model(model, messages, enable_search=enable_search, session_id=session_id, **kwargs)
 
 
 async def query_models_parallel(
     models: list[str],
     messages: list,
     enable_search: bool = True,
+    session_ids: dict[str, str] = None,
     **kwargs,
 ) -> dict[str, Any]:
+    if session_ids is None:
+        session_ids = {}
     tasks = [
-        _staggered_query(model, messages, enable_search, i * STAGGER_DELAY, **kwargs)
+        _staggered_query(model, messages, enable_search, i * STAGGER_DELAY, session_ids.get(model), **kwargs)
         for i, model in enumerate(models)
     ]
     results = await asyncio.gather(*tasks, return_exceptions=True)

@@ -146,10 +146,11 @@ async def reload_model_sets() -> Dict[str, Any]:
 
 async def set_model_sets(sets: Dict[str, Any]) -> Dict[str, Any]:
     """Update model sets atomically."""
-    global _model_sets
+    global _model_sets, _MODEL_SETS_SYNC
     async with _model_sets_lock:
         await _save_model_sets_async(sets)
         _model_sets = sets
+        _MODEL_SETS_SYNC = None  # Invalidate sync cache
     return _model_sets
 
 
@@ -171,6 +172,7 @@ async def _load_active_model_set_async() -> str:
 
 async def _save_active_model_set_async(set_id: str) -> None:
     """Persist active model set to disk atomically with fallback for filesystems that don't support os.replace."""
+    global _ACTIVE_MODEL_SET_SYNC
     parent = os.path.dirname(ACTIVE_MODEL_SET_FILE)
     if parent:
         os.makedirs(parent, exist_ok=True)
@@ -184,6 +186,7 @@ async def _save_active_model_set_async(set_id: str) -> None:
         # Fallback for filesystems that don't support atomic replace (e.g., some network mounts)
         import shutil
         shutil.move(tmp, ACTIVE_MODEL_SET_FILE)
+    _ACTIVE_MODEL_SET_SYNC = None  # Invalidate sync cache
 
 
 async def get_active_model_set() -> str:

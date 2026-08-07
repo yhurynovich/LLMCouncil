@@ -105,7 +105,8 @@ def create_conversation(conversation_id: str) -> Dict[str, Any]:
         "id": conversation_id,
         "created_at": datetime.utcnow().isoformat(),
         "title": "New Conversation",
-        "messages": []
+        "messages": [],
+        "model_sessions": {}  # model_id -> session_id
     }
 
     # Save to file atomically
@@ -418,3 +419,42 @@ async def delete_conversation_async(conversation_id: str) -> bool:
         if conversation_id in _conversation_locks:
             del _conversation_locks[conversation_id]
     return True
+
+
+async def get_model_sessions_async(conversation_id: str) -> Dict[str, str]:
+    """Get model session IDs for a conversation."""
+    conversation = await get_conversation_async(conversation_id)
+    if conversation is None:
+        return {}
+    return conversation.get("model_sessions", {})
+
+
+async def set_model_session_async(conversation_id: str, model_id: str, session_id: str) -> None:
+    """Set a model session ID for a conversation."""
+    lock = await _get_conversation_lock(conversation_id)
+    async with lock:
+        conversation = await get_conversation_async(conversation_id)
+        if conversation is None:
+            raise ValueError(f"Conversation {conversation_id} not found")
+        
+        if "model_sessions" not in conversation:
+            conversation["model_sessions"] = {}
+        conversation["model_sessions"][model_id] = session_id
+        
+        await save_conversation_async(conversation)
+
+
+async def get_or_create_model_session_async(conversation_id: str, model_id: str) -> str:
+    """Get existing session ID or create a new one for a model in a conversation.
+    Uses per-conversation lock to prevent race conditions."""
+    lock = await _get_conversation_lock(conversation_id)
+    async with lock:
+        sessions = await get_model_sessions_async(conversation_id)
+        if model_id in sessions:
+            return sessions[model_id]
+        
+        # Generate new session ID
+        import uuid
+        session_id = str(uuid.uuid4())
+        await set_model_session_async(conversation_id, model_id, session_id)
+        return session_id

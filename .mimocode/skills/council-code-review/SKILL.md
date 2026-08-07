@@ -1,6 +1,6 @@
 ---
 name: council-code-review
-description: "Code review using LLM Council multi-model deliberation. Sends code to a panel of models that independently evaluate and rank each other's feedback, then a chairman synthesizes a final verdict. Use when user asks for 'council review', 'code review', 'multi-model review', 'review my code', 'council feedback', or wants code evaluated by multiple LLMs. Supports file attachments (any code file type)."
+description: "Code review using LLM Council multi-model deliberation. Sends code to a panel of models that independently evaluate and rank each other's feedback, then a chairman synthesizes a final verdict. Use when user asks for 'council review', 'code review', 'multi-model review', 'review my code', 'council feedback', or wants code evaluated by multiple LLMs. Supports file attachments (any code file type). Supports session ID tracking for OpenRouter proxy observability."
 ---
 
 # Council Code Review
@@ -62,6 +62,7 @@ python3 SKILL_DIR/scripts/council_review.py \
 - `--code`: Code string to review (use when code is inline)
 - `--files`: Space-separated file paths to attach (reads content and includes in payload)
 - `--context`: Optional context/instructions for the review (e.g. "focus on security", "review for performance")
+- `--session-id`: Optional session ID for conversation tracking (auto-generated UUID if not provided). This is sent as `X-Session-ID` and `X-Conversation-ID` headers to the OpenRouter proxy for log correlation and observability.
 
 ### Step 3: Present results
 
@@ -82,6 +83,16 @@ The user may ask to:
 - Re-run with different focus areas (security, performance, style)
 - Drill into a specific model's feedback
 - Compare reviews across different code snippets
+
+## Session Tracking
+
+The script supports session tracking via the `--session-id` argument. This is useful for:
+
+- **Correlating requests** across multiple review runs for the same codebase
+- **Log correlation** in the OpenRouter proxy server (logs include `X-Session-ID`)
+- **Debugging** - include the session ID in error reports
+
+If not provided, a random UUID is generated and printed to stderr.
 
 ## Examples
 

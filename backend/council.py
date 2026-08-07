@@ -1,11 +1,13 @@
 """3-stage LLM Council orchestration."""
 
 import re
+import uuid
 from collections import defaultdict
 from typing import List, Dict, Any, Tuple, Optional, Union
 from .llm_client import query_models_parallel, query_model
 from .config import get_council_models, get_chairman_model, get_council_models_sync, get_chairman_model_sync
 from .uploads import read_file_content, get_image_base64
+from .storage import get_or_create_model_session_async
 
 FINAL_RANKING_TOKEN = "FINAL RANKING:"
 MAX_RESPONSE_CHARS = 3000
@@ -57,7 +59,8 @@ async def stage1_collect_responses(
     files: Optional[list] = None,
     temperature: Optional[float] = None,
     max_tokens: Optional[int] = None,
-) -> List[Dict[str, Any]]:
+    conversation_id: Optional[str] = None,
+) -> Tuple[List[Dict[str, Any]], Dict[str, str]]:
     # Handle files if present (multimodal content)
     if files:
         content = build_message_with_files(messages[-1].get("content", ""), files)
@@ -66,7 +69,14 @@ async def stage1_collect_responses(
         new_messages = messages
     
     models = council_models if council_models is not None else await get_council_models()
-    responses = await query_models_parallel(models, new_messages, temperature=temperature, max_tokens=max_tokens)
+    
+    # Get or create session IDs for each model
+    session_ids = {}
+    if conversation_id:
+        for model in models:
+            session_ids[model] = await get_or_create_model_session_async(conversation_id, model)
+    
+    responses = await query_models_parallel(models, new_messages, temperature=temperature, max_tokens=max_tokens, session_ids=session_ids)
 
     stage1_results = []
     for model, response in responses.items():
@@ -83,7 +93,7 @@ async def stage1_collect_responses(
                 "response": None,
                 "error": error_msg,
             })
-    return stage1_results
+    return stage1_results, session_ids
 
 
 async def stage2_collect_rankings(
@@ -92,7 +102,9 @@ async def stage2_collect_rankings(
     council_models: Optional[List[str]] = None,
     temperature: Optional[float] = None,
     max_tokens: Optional[int] = None,
-) -> Tuple[List[Dict[str, Any]], Dict[str, str]]:
+    conversation_id: Optional[str] = None,
+    session_ids: Optional[Dict[str, str]] = None,
+) -> Tuple[List[Dict[str, Any]], Dict[str, str], Dict[str, str]]:
     # Filter out failed models (those with response=None)
     successful_results = [r for r in stage1_results if r.get('response') is not None]
 
@@ -152,9 +164,20 @@ FINAL RANKING:
 
 Now provide your evaluation and ranking:"""
 
-    messages = [{"role": "user", "content": ranking_prompt}]
+    ranking_messages = [{"role": "user", "content": ranking_prompt}]
     models = council_models if council_models is not None else await get_council_models()
-    responses = await query_models_parallel(models, messages, temperature=temperature, max_tokens=max_tokens)
+    
+    # Pass session_ids for ranking models
+    ranking_session_ids = {}
+    if conversation_id and session_ids:
+        for model in models:
+            if model in session_ids:
+                ranking_session_ids[model] = session_ids[model]
+            else:
+                # Create new session for ranking if needed
+                ranking_session_ids[model] = await get_or_create_model_session_async(conversation_id, model)
+    
+    responses = await query_models_parallel(models, ranking_messages, temperature=temperature, max_tokens=max_tokens, session_ids=ranking_session_ids)
 
     stage2_results = []
     for model, response in responses.items():
@@ -167,7 +190,7 @@ Now provide your evaluation and ranking:"""
                 "parsed_ranking": parsed
             })
 
-    return stage2_results, label_to_model
+    return stage2_results, label_to_model, ranking_session_ids
 
 
 async def stage3_synthesize_final(
@@ -177,6 +200,8 @@ async def stage3_synthesize_final(
     chairman_model: Optional[str] = None,
     temperature: Optional[float] = None,
     max_tokens: Optional[int] = None,
+    conversation_id: Optional[str] = None,
+    session_ids: Optional[Dict[str, str]] = None,
 ) -> Dict[str, Any]:
     chair = chairman_model if chairman_model is not None else await get_chairman_model()
 
@@ -217,8 +242,16 @@ Your task as Chairman is to synthesize all of this information into a single, co
 
 Provide a clear, well-reasoned final answer that represents the council's collective wisdom:"""
 
-    messages = [{"role": "user", "content": chairman_prompt}]
-    response = await query_model(chair, messages, temperature=temperature, max_tokens=max_tokens)
+    chairman_messages = [{"role": "user", "content": chairman_prompt}]
+    
+    # Get session_id for chairman
+    chairman_session_id = None
+    if conversation_id and session_ids and chair in session_ids:
+        chairman_session_id = session_ids[chair]
+    elif conversation_id:
+        chairman_session_id = await get_or_create_model_session_async(conversation_id, chair)
+    
+    response = await query_model(chair, chairman_messages, temperature=temperature, max_tokens=max_tokens, session_id=chairman_session_id)
 
     if response is None:
         return {"model": chair, "response": "Error: Unable to generate final synthesis."}
@@ -311,8 +344,8 @@ Title:"""
     return title[:max_len - 3] + "..." if len(title) > max_len else title
 
 
-async def run_full_council(messages: List[Dict[str, Any]], council_models: Optional[List[str]] = None, temperature: Optional[float] = None, max_tokens: Optional[int] = None) -> Tuple[List, List, Dict, Dict]:
-    stage1_results = await stage1_collect_responses(messages, council_models=council_models, temperature=temperature, max_tokens=max_tokens)
+async def run_full_council(messages: List[Dict[str, Any]], council_models: Optional[List[str]] = None, temperature: Optional[float] = None, max_tokens: Optional[int] = None, conversation_id: Optional[str] = None) -> Tuple[List, List, Dict, Dict]:
+    stage1_results, session_ids = await stage1_collect_responses(messages, council_models=council_models, temperature=temperature, max_tokens=max_tokens, conversation_id=conversation_id)
 
     if not stage1_results:
         return [], [], {
@@ -321,9 +354,13 @@ async def run_full_council(messages: List[Dict[str, Any]], council_models: Optio
         }, {}
 
     responding_models = [r["model"] for r in stage1_results if r.get("response") is not None]
-    stage2_results, label_to_model = await stage2_collect_rankings(messages, stage1_results, responding_models, temperature=temperature, max_tokens=max_tokens)
+    stage2_results, label_to_model, ranking_session_ids = await stage2_collect_rankings(messages, stage1_results, responding_models, temperature=temperature, max_tokens=max_tokens, conversation_id=conversation_id, session_ids=session_ids)
+    
+    # Merge session_ids (include ranking sessions)
+    all_session_ids = {**session_ids, **ranking_session_ids}
+    
     aggregate_rankings = calculate_aggregate_rankings(stage2_results, label_to_model)
-    stage3_result = await stage3_synthesize_final(messages, stage1_results, stage2_results, temperature=temperature, max_tokens=max_tokens)
+    stage3_result = await stage3_synthesize_final(messages, stage1_results, stage2_results, temperature=temperature, max_tokens=max_tokens, conversation_id=conversation_id, session_ids=all_session_ids)
 
     return stage1_results, stage2_results, stage3_result, {
         "label_to_model": label_to_model,

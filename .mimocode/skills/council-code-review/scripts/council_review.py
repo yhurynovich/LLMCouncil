@@ -8,12 +8,14 @@ Model set: code (server-side group of models)
 Usage:
     python council_review.py --code "def foo(): pass" --files main.py utils.py
     python council_review.py --files src/app.py --context "focus on security"
+    python council_review.py --files src/app.py --stream --output-format text
 """
 
 import argparse
 import json
 import sys
 import os
+import uuid
 from pathlib import Path
 from urllib.request import Request, urlopen
 from urllib.error import URLError, HTTPError
@@ -75,7 +77,7 @@ def build_review_prompt(code: str, files: dict[str, str], context: str | None) -
     return prompt
 
 
-def query_council(url: str, model: str, prompt: str) -> dict:
+def query_council(url: str, model: str, prompt: str, session_id: str | None = None, stream: bool = False) -> dict | None:
     """Send review request to the LLM Council backend."""
     endpoint = f"{url}/chat/completions"
 
@@ -94,18 +96,32 @@ def query_council(url: str, model: str, prompt: str) -> dict:
         ],
         "temperature": 0.3,
         "max_tokens": 4096,
+        "stream": stream,
     }
 
     data = json.dumps(payload).encode("utf-8")
+
+    # Build headers - include session tracking for OpenRouter proxy observability
+    headers = {
+        "Content-Type": "application/json",
+    }
+
+    if session_id:
+        headers["X-Session-ID"] = session_id
+        headers["X-Conversation-ID"] = session_id
+    headers["X-Request-ID"] = str(uuid.uuid4())
+
     req = Request(
         endpoint,
         data=data,
-        headers={"Content-Type": "application/json"},
+        headers=headers,
         method="POST",
     )
 
     try:
         with urlopen(req, timeout=TIMEOUT) as resp:
+            if stream:
+                return resp  # Return response object for streaming
             body = json.loads(resp.read().decode("utf-8"))
             return body
     except HTTPError as e:
@@ -134,6 +150,39 @@ def extract_content(response: dict) -> str | None:
     return None
 
 
+def parse_sse_stream(response) -> str:
+    """Parse SSE stream and extract final content."""
+    content_parts = []
+    for line in response:
+        line = line.decode("utf-8").strip()
+        if line.startswith("data: "):
+            data_str = line[6:]
+            if data_str == "[DONE]":
+                break
+            try:
+                data = json.loads(data_str)
+                delta = data.get("choices", [{}])[0].get("delta", {})
+                if "content" in delta:
+                    content_parts.append(delta["content"])
+            except json.JSONDecodeError:
+                continue
+    return "".join(content_parts)
+
+
+def format_review_output(response: dict) -> str:
+    """Format the council response for human-readable output."""
+    if not response:
+        return "No response received."
+
+    # Try to extract the main content
+    content = extract_content(response)
+    if content:
+        return content
+
+    # If no content, return raw JSON
+    return json.dumps(response, indent=2)
+
+
 def main():
     parser = argparse.ArgumentParser(description="LLM Council Code Review")
     parser.add_argument("--url", default=DEFAULT_URL, help="Backend API URL")
@@ -142,9 +191,22 @@ def main():
     parser.add_argument("--files", nargs="*", default=[], help="File paths to attach")
     parser.add_argument("--context", default=None, help="Additional review context")
     parser.add_argument(
+        "--session-id", default=None, help="Session ID for conversation tracking (auto-generated if not provided)"
+    )
+    parser.add_argument(
+        "--stream", action="store_true", help="Use streaming endpoint"
+    )
+    parser.add_argument(
         "--raw", action="store_true", help="Output raw API response JSON"
     )
+    parser.add_argument(
+        "--format", choices=["text", "json"], default="text", help="Output format for non-raw mode"
+    )
     args = parser.parse_args()
+
+    # Generate session ID if not provided
+    session_id = args.session_id or str(uuid.uuid4())
+    print(f"Using session ID: {session_id}", file=sys.stderr)
 
     # Read attached files
     files = read_files(args.files) if args.files else {}
@@ -153,14 +215,25 @@ def main():
     prompt = build_review_prompt(args.code, files, args.context)
 
     # Query the council
-    response = query_council(args.url, args.model, prompt)
+    response = query_council(args.url, args.model, prompt, session_id=session_id, stream=args.stream)
 
-    if args.raw:
+    if args.stream:
+        # Handle streaming response
+        final_content = parse_sse_stream(response)
+        if args.raw:
+            # For streaming, we can't easily output raw JSON
+            print(final_content)
+        else:
+            print(final_content)
+    elif args.raw:
         print(json.dumps(response, indent=2))
     else:
         content = extract_content(response)
         if content:
-            print(content)
+            if args.format == "json":
+                print(json.dumps({"content": content}, indent=2))
+            else:
+                print(content)
         else:
             print("No response content received.", file=sys.stderr)
             print(json.dumps(response, indent=2))
