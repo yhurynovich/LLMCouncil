@@ -655,6 +655,41 @@ async def delete_conversation(conversation_id: str):
     return {"ok": True}
 
 
+async def _with_heartbeat(coro, interval: float = 15.0):
+    """Run `coro` in the background, yielding an SSE comment line every
+    `interval` seconds while it's still working, then yielding the
+    completed asyncio.Task as the final item.
+
+    Stage 1/2/3 can legitimately take well over a minute (multiple LLM
+    calls, retries, slow/rate-limited free models) during which the
+    endpoint below sends zero bytes. Any HTTP proxy that idle-times-out a
+    connection (nginx's proxy_read_timeout, Synology's Reverse Proxy
+    "Proxy read timeout", corporate proxies, etc.) will kill a silent
+    connection like that well before it kills a connection that's still
+    receiving bytes. Emitting a small `: keep-alive` comment periodically
+    keeps every hop convinced the connection is alive, independent of how
+    any particular proxy in front of us is configured.
+
+    SSE comment lines (starting with ':') are part of the spec and are
+    already ignored by the frontend's parser (it only reacts to lines
+    starting with 'data:'), so this is invisible to the UI.
+
+    Usage:
+        result = None
+        async for item in _with_heartbeat(some_coro(...)):
+            if isinstance(item, asyncio.Task):
+                result = item.result()
+            else:
+                yield item  # forward the heartbeat comment to the client
+    """
+    task = asyncio.create_task(coro)
+    while not task.done():
+        done, _ = await asyncio.wait({task}, timeout=interval)
+        if not done:
+            yield ": keep-alive\n\n"
+    yield task
+
+
 @app.post("/api/conversations/{conversation_id}/message/stream", tags=["Conversations"])
 async def send_message_stream(conversation_id: str, request: SendMessageRequest):
     conversation = await storage.get_conversation_async(conversation_id)
@@ -694,7 +729,13 @@ async def send_message_stream(conversation_id: str, request: SendMessageRequest)
             # Stage 1
             print(f"[STREAM] Stage 1 starting — set={set_id}, models={council_models}, quick={request.quick}, files={len(request.files)}", flush=True)
             yield f"data: {json.dumps({'type': 'stage1_start'})}\n\n"
-            stage1_results = await stage1_collect_responses(messages, council_models, files=request.files)
+            async for item in _with_heartbeat(
+                stage1_collect_responses(messages, council_models, files=request.files)
+            ):
+                if isinstance(item, asyncio.Task):
+                    stage1_results = item.result()
+                else:
+                    yield item
             print(f"[STREAM] Stage 1 complete: {len(stage1_results)} responses", flush=True)
             yield f"data: {json.dumps({'type': 'stage1_complete', 'data': stage1_results})}\n\n"
 
@@ -714,11 +755,17 @@ async def send_message_stream(conversation_id: str, request: SendMessageRequest)
                     yield f"data: {json.dumps({'type': 'complete'})}\n\n"
                     return
 
-                stage2_results, label_to_model = await stage2_collect_rankings(
-                    messages, stage1_results, responding_models,
-                    temperature=request.temperature,
-                    max_tokens=request.max_tokens
-                )
+                async for item in _with_heartbeat(
+                    stage2_collect_rankings(
+                        messages, stage1_results, responding_models,
+                        temperature=request.temperature,
+                        max_tokens=request.max_tokens
+                    )
+                ):
+                    if isinstance(item, asyncio.Task):
+                        stage2_results, label_to_model = item.result()
+                    else:
+                        yield item
                 aggregate_rankings = calculate_aggregate_rankings(stage2_results, label_to_model)
                 print(f"[STREAM] Stage 2 complete", flush=True)
                 yield f"data: {json.dumps({'type': 'stage2_complete', 'data': stage2_results, 'metadata': {'label_to_model': label_to_model, 'aggregate_rankings': aggregate_rankings}})}\n\n"
@@ -726,11 +773,17 @@ async def send_message_stream(conversation_id: str, request: SendMessageRequest)
                 # Stage 3
                 print(f"[STREAM] Stage 3 starting", flush=True)
                 yield f"data: {json.dumps({'type': 'stage3_start'})}\n\n"
-                stage3_result = await stage3_synthesize_final(
-                    messages, stage1_results, stage2_results, chairman_model,
-                    temperature=request.temperature,
-                    max_tokens=request.max_tokens
-                )
+                async for item in _with_heartbeat(
+                    stage3_synthesize_final(
+                        messages, stage1_results, stage2_results, chairman_model,
+                        temperature=request.temperature,
+                        max_tokens=request.max_tokens
+                    )
+                ):
+                    if isinstance(item, asyncio.Task):
+                        stage3_result = item.result()
+                    else:
+                        yield item
                 print(f"[STREAM] Stage 3 complete", flush=True)
                 yield f"data: {json.dumps({'type': 'stage3_complete', 'data': stage3_result})}\n\n"
 
@@ -775,7 +828,14 @@ async def send_message_stream(conversation_id: str, request: SendMessageRequest)
     return StreamingResponse(
         event_generator(),
         media_type="text/event-stream",
-        headers={"Cache-Control": "no-cache", "Connection": "keep-alive"},
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            # Tell any nginx-based proxy in the chain (including Synology's
+            # reverse proxy, which is nginx under the hood) to forward bytes
+            # immediately instead of buffering the whole response.
+            "X-Accel-Buffering": "no",
+        },
     )
 
 

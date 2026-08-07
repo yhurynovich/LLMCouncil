@@ -47,6 +47,12 @@ server {
         # Increase timeouts for long-running LLM requests
         proxy_read_timeout 300s;
         proxy_send_timeout 300s;
+        # Forward SSE chunks to the client as soon as they arrive instead of
+        # buffering the response (buffering can hold the whole stream open
+        # with no visible progress, which reads as a hang/timeout to any
+        # proxy sitting in front of this one).
+        proxy_buffering    off;
+        proxy_cache        off;
     }
 }
 EOF
