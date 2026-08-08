@@ -139,6 +139,7 @@ from .council import (
 from .metrics import get_metrics_summary
 from .feedback import add_feedback, get_feedback_for_conversation
 from .reliability import update_from_feedback
+from . import storage
 from .web_search import close_searxng_client
 
 

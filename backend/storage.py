@@ -430,18 +430,16 @@ async def get_model_sessions_async(conversation_id: str) -> Dict[str, str]:
 
 
 async def set_model_session_async(conversation_id: str, model_id: str, session_id: str) -> None:
-    """Set a model session ID for a conversation."""
-    lock = await _get_conversation_lock(conversation_id)
-    async with lock:
-        conversation = await get_conversation_async(conversation_id)
-        if conversation is None:
-            raise ValueError(f"Conversation {conversation_id} not found")
-        
-        if "model_sessions" not in conversation:
-            conversation["model_sessions"] = {}
-        conversation["model_sessions"][model_id] = session_id
-        
-        await save_conversation_async(conversation)
+    """Set a model session ID for a conversation. Assumes lock is already held."""
+    conversation = await get_conversation_async(conversation_id)
+    if conversation is None:
+        raise ValueError(f"Conversation {conversation_id} not found")
+    
+    if "model_sessions" not in conversation:
+        conversation["model_sessions"] = {}
+    conversation["model_sessions"][model_id] = session_id
+    
+    await save_conversation_async(conversation)
 
 
 async def get_or_create_model_session_async(conversation_id: str, model_id: str) -> str:

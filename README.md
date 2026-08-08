@@ -60,6 +60,14 @@ When you submit a query:
 - **OpenAPI documentation** — full API docs at `/docs`
 - **JSON storage** — conversations persisted in `data/conversations/`
 
+### Model Context Protocol (MCP) Server
+- **MCP Server** — exposes the LLM Council as an MCP server with stdio transport
+- **Resources**: model sets, providers, conversations (read-only)
+- **Tools**: `run_council`, `list_model_sets`, `list_providers`, `get_conversation`, `create_conversation`, `query_model`
+- **Session tracking**: Uses `X-Session-ID` header for model session continuity
+- Run with: `python -m backend.mcp_server` or `uv run python -m backend.mcp_server`
+- Works with MCP-compatible clients (Claude Desktop, Continue, etc.)
+
 ## Authentication
 
 The backend has **no authentication** — all API endpoints are publicly accessible.
@@ -148,6 +156,11 @@ cd frontend
 npm run dev
 ```
 
+Terminal 3 (MCP Server):
+```bash
+uv run python -m backend.mcp_server
+```
+
 Open http://localhost:5173 in your browser.
 
 ## API Endpoints
@@ -173,6 +186,11 @@ Open http://localhost:5173 in your browser.
 |--------|----------|-------------|
 | GET | `/v1/models` | List models (OpenAI format) |
 | POST | `/v1/chat/completions` | Chat completion (supports `stream=true`) |
+
+### MCP Server
+| Transport | Endpoint | Description |
+|-----------|----------|-------------|
+| stdio | `python -m backend.mcp_server` | MCP server with stdio transport |
 
 ## Tech Stack
 
