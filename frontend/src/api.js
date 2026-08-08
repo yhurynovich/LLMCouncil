@@ -51,12 +51,18 @@ async function fetchWithAuth(url, options = {}) {
   const headers = {
     ...options.headers,
   };
-  
+
+  // Add Basic Auth if credentials are available
+  if (authCredentials) {
+    const token = btoa(`${authCredentials.username}:${authCredentials.password}`);
+    headers['Authorization'] = `Basic ${token}`;
+  }
+
   const response = await fetch(url, {
     ...options,
     headers,
   });
-  
+
   return response;
 }
 
@@ -262,6 +268,24 @@ export const api = {
       }
     };
 
+    let currentEventData = [];
+
+    const processLine = (line) => {
+      if (line.startsWith('data:')) {
+        // SSE data field can span multiple lines - each line starts with "data:"
+        currentEventData.push(line.slice(5).trim());
+      } else if (line === '') {
+        // Blank line ends the event - join multi-line data with \n
+        if (currentEventData.length > 0) {
+          eventData = currentEventData.join('\n');
+          currentEventData = [];
+          flushEvent();
+        }
+      } else if (line.startsWith('event:') || line.startsWith('id:') || line.startsWith('retry:')) {
+        // Other SSE fields we ignore (we use JSON 'type' field instead)
+      }
+    };
+
     try {
       while (!signal?.aborted) {
         const { done, value } = await reader.read();
@@ -274,19 +298,22 @@ export const api = {
           buffer = buffer.slice(eventEnd + 2);
           const lines = event.split('\n');
           for (const line of lines) {
-            if (line.startsWith('data:')) {
-              eventData += (eventData ? '\n' : '') + line.slice(5).trim();
-            }
-            // ignore event:, id:, retry: - we use JSON 'type' field instead
+            processLine(line);
           }
-          // Flush on blank line (end of SSE event)
-          flushEvent();
+          // In case the event doesn't end with blank line but we have complete JSON
+          if (currentEventData.length > 0) {
+            eventData = currentEventData.join('\n');
+            currentEventData = [];
+            flushEvent();
+          }
         }
       }
     } finally {
       reader.cancel().catch(() => {});
       // Process any remaining event
-      if (eventData) {
+      if (currentEventData.length > 0) {
+        eventData = currentEventData.join('\n');
+        currentEventData = [];
         flushEvent();
       }
     }
@@ -297,15 +324,62 @@ export function isAuthenticated() {
   return authCredentials !== null;
 }
 
+// Auth change listeners
+const _authChangeListeners = new Set();
+
+function notifyAuthChange() {
+  _authChangeListeners.forEach(cb => cb());
+}
+
 export function onAuthChange(callback) {
-  // For future use - could be expanded with event listeners
-  return () => {};
+  _authChangeListeners.add(callback);
+  return () => _authChangeListeners.delete(callback);
+}
+
+// Simple in-memory rate limiter for login attempts
+const _loginAttempts = new Map(); // ip -> [timestamps]
+const MAX_LOGIN_ATTEMPTS = 5;
+const LOGIN_WINDOW_MS = 5 * 60 * 1000; // 5 minutes
+
+function getClientIP() {
+  // In browser, we can't get real IP, but we can use a fingerprint
+  // For simplicity, use a session-based identifier
+  let fp = sessionStorage.getItem('llm_council_fingerprint');
+  if (!fp) {
+    fp = Math.random().toString(36).substring(2, 15);
+    sessionStorage.setItem('llm_council_fingerprint', fp);
+  }
+  return fp;
+}
+
+function checkRateLimit() {
+  const ip = getClientIP();
+  const now = Date.now();
+  const attempts = _loginAttempts.get(ip) || [];
+  
+  // Clean old attempts
+  const recent = attempts.filter(t => now - t < 5 * 60 * 1000);
+  
+  if (recent.length >= 5) {
+    return false;
+  }
+  
+  recent.push(now);
+  _loginAttempts.set(ip, recent);
+  return true;
 }
 
 export function login(username, password) {
   return new Promise((resolve, reject) => {
+    // Check rate limit
+    if (!checkRateLimit()) {
+      reject(new Error('Too many login attempts. Please try again in 5 minutes.'));
+      return;
+    }
+    
     if (validateCredentials(username, password)) {
       setAuthCredentials(username, password);
+      notifyAuthChange();
       resolve(true);
     } else {
       reject(new Error('Invalid credentials'));
@@ -315,6 +389,7 @@ export function login(username, password) {
 
 export function logout() {
   clearAuthCredentials();
+  notifyAuthChange();
 }
 
 // App.jsx calls these as api.isAuthenticated() / api.onAuthChange() / api.login() / api.logout(),

@@ -1,7 +1,7 @@
 """FastAPI backend for LLM Council."""
 
 from contextlib import asynccontextmanager
-from fastapi import FastAPI, HTTPException, UploadFile, File, Header
+from fastapi import FastAPI, HTTPException, UploadFile, File, Header, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
@@ -10,22 +10,124 @@ import uuid
 import json
 import asyncio
 import traceback
-import httpx
 import re
+import time
+from collections import defaultdict
 
 # UUID v4 regex for validation
 UUID_V4_REGEX = re.compile(r'^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$', re.IGNORECASE)
+
+# Simple in-memory rate limiter for auth endpoints
+_login_attempts: Dict[str, List[float]] = defaultdict(list)
+_login_lock = asyncio.Lock()
+MAX_LOGIN_ATTEMPTS = 5
+LOGIN_WINDOW_SECONDS = 300  # 5 minutes
+
+async def check_rate_limit(client_ip: str) -> bool:
+    """Check if client has exceeded login attempt rate limit."""
+    async with _login_lock:
+        now = time.time()
+        # Clean old attempts
+        _login_attempts[client_ip] = [t for t in _login_attempts[client_ip] if now - t < LOGIN_WINDOW_SECONDS]
+        if len(_login_attempts[client_ip]) >= MAX_LOGIN_ATTEMPTS:
+            return False
+        _login_attempts[client_ip].append(now)
+        return True
 
 def _is_valid_uuid(uuid_str: str) -> bool:
     """Check if string is a valid UUID v4."""
     return bool(UUID_V4_REGEX.match(uuid_str))
 
-from . import storage
+
+def sanitize_error_message(error_msg: str) -> str:
+    """Sanitize error messages to remove sensitive information like API keys."""
+    if not error_msg:
+        return ""
+    # Remove Bearer tokens
+    error_msg = re.sub(r'(Bearer\s+)[^\s]+', r'\1[REDACTED]', error_msg)
+    # Remove API keys in URLs (basic pattern)
+    error_msg = re.sub(r'(api[_-]?key[=:]["\']?)[^"\'\s&]+', r'\1[REDACTED]', error_msg, flags=re.IGNORECASE)
+    # Remove potential sk- prefixed keys
+    error_msg = re.sub(r'sk-[a-zA-Z0-9]{20,}', '[REDACTED]', error_msg)
+    return error_msg
+
+
+async def _fetch_provider_models(provider_name: str, provider: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """
+    Fetch models from a single provider.
+    Returns list of model dicts with id, name, provider, pricing, context_length.
+    """
+    api_key = prov.get_provider_api_key(provider)
+    if not api_key and provider_name != "openrouter":
+        return []
+
+    try:
+        base = provider["base_url"]
+        if base.endswith("/chat/completions"):
+            models_url = base.replace("/chat/completions", "/models")
+        elif base.endswith("/v1/chat/completions"):
+            models_url = base.replace("/v1/chat/completions", "/v1/models")
+        else:
+            models_url = base.rstrip("/") + "/models"
+
+        headers = {}
+        if api_key:
+            headers["Authorization"] = f"Bearer {api_key}"
+
+        # Use shared client with SSRF protection
+        client = get_shared_client()
+        if client is None:
+            print(f"Shared HTTP client not initialized for {provider_name}")
+            raise RuntimeError("Shared HTTP client not initialized")
+
+        resp = await client.get(models_url, headers=headers, timeout=30)
+        if resp.status_code == 200:
+            data = resp.json()
+            models = []
+            for m in data.get("data", []):
+                model_id = m.get("id", "")
+                if model_id:
+                    models.append({
+                        "id": f"{provider_name}/{model_id}",
+                        "name": m.get("name", model_id),
+                        "provider": provider_name,
+                        "pricing": m.get("pricing", {}),
+                        "context_length": m.get("context_length"),
+                    })
+            return models
+        else:
+            # Fallback: use configured model if models endpoint fails
+            model_id = provider.get("model", "")
+            if model_id:
+                return [{
+                    "id": f"{provider_name}/{model_id}",
+                    "name": model_id,
+                    "provider": provider_name,
+                    "pricing": {},
+                    "context_length": None,
+                }]
+            return []
+    except Exception as e:
+        print(f"Error fetching models from {provider_name}: {sanitize_error_message(str(e))}")
+        # Fallback: use configured model
+        model_id = provider.get("model", "")
+        if model_id:
+            return [{
+                "id": f"{provider_name}/{model_id}",
+                "name": model_id,
+                "provider": provider_name,
+                "pricing": {},
+                "context_length": None,
+            }]
+        return []
+
+
+# Simple in-memory rate limiter for auth endpoints
 from . import config as cfg
 from . import providers as prov
 from . import uploads
 from .llm_client import _get_proxy_url
-from .http_client import create_shared_client, close_shared_client
+from .http_client import create_shared_client, close_shared_client, get_shared_client
 from .council import (
     run_full_council,
     generate_conversation_title,
@@ -36,6 +138,7 @@ from .council import (
 )
 from .metrics import get_metrics_summary
 from .feedback import add_feedback, get_feedback_for_conversation
+from .reliability import update_from_feedback
 from .web_search import close_searxng_client
 
 
@@ -70,6 +173,8 @@ app = FastAPI(
 import os
 ALLOWED_ORIGINS = os.getenv("ALLOWED_ORIGINS", "http://localhost:5173,http://localhost:3000,http://192.168.31.66:5173,http://192.168.31.66:5174").split(",")
 
+# allow_credentials=False is correct here because auth uses Basic Auth header (not cookies).
+# The frontend sends credentials via Authorization: Basic <base64> header, not cookies.
 app.add_middleware(
     CORSMiddleware,
     allow_origins=ALLOWED_ORIGINS,
@@ -258,10 +363,34 @@ async def create_model_set(request: CreateModelSetRequest):
     set_id = request.set_id.strip().lower().replace(" ", "-")
     if not set_id:
         raise HTTPException(status_code=400, detail="set_id is required")
+    
+    # Validate council models
+    if not request.council or not isinstance(request.council, list):
+        raise HTTPException(status_code=400, detail="council must be a non-empty list of model IDs")
+    if len(request.council) == 0:
+        raise HTTPException(status_code=400, detail="council must contain at least one model")
+    
+    # Validate chairman
+    if not request.chairman:
+        raise HTTPException(status_code=400, detail="chairman is required")
+    
+    # Validate all model IDs exist in providers
     model_sets = await cfg.get_model_sets()
+    providers = await prov.get_providers()
+    all_model_ids = set()
+    for p in providers.values():
+        if "model" in p:
+            all_model_ids.add(p["model"])
+    
+    for model in request.council:
+        if model not in all_model_ids:
+            raise HTTPException(status_code=400, detail=f"Invalid model ID in council: {model}")
+    if request.chairman not in all_model_ids:
+        raise HTTPException(status_code=400, detail=f"Invalid chairman model ID: {request.chairman}")
+    
     if set_id in model_sets:
         raise HTTPException(status_code=409, detail=f"Model set '{set_id}' already exists")
-
+    
     new_set = {
         "label": request.label,
         "icon": request.icon or request.label[:4].upper(),
@@ -282,16 +411,39 @@ async def update_model_set(set_id: str, request: UpdateModelSetRequest):
         raise HTTPException(status_code=404, detail=f"Model set '{set_id}' not found")
 
     ms = model_sets[set_id]
+    
+    # Validate council if provided
+    if request.council is not None:
+        if not isinstance(request.council, list) or len(request.council) == 0:
+            raise HTTPException(status_code=400, detail="council must be a non-empty list")
+        providers = await prov.get_providers()
+        all_model_ids = set()
+        for p in providers.values():
+            if "model" in p:
+                all_model_ids.add(p["model"])
+        for model in request.council:
+            if model not in all_model_ids:
+                raise HTTPException(status_code=400, detail=f"Invalid model ID in council: {model}")
+        ms["council"] = request.council
+    
+    if request.chairman is not None:
+        if not request.chairman:
+            raise HTTPException(status_code=400, detail="chairman cannot be empty")
+        providers = await prov.get_providers()
+        all_model_ids = set()
+        for p in providers.values():
+            if "model" in p:
+                all_model_ids.add(p["model"])
+        if request.chairman not in all_model_ids:
+            raise HTTPException(status_code=400, detail=f"Invalid chairman model ID: {request.chairman}")
+        ms["chairman"] = request.chairman
+    
     if request.label is not None:
         ms["label"] = request.label
     if request.icon is not None:
         ms["icon"] = request.icon
     if request.description is not None:
         ms["description"] = request.description
-    if request.council is not None:
-        ms["council"] = request.council
-    if request.chairman is not None:
-        ms["chairman"] = request.chairman
 
     await cfg.set_model_sets(model_sets)
     return {"ok": True, "set_id": set_id}
@@ -309,7 +461,13 @@ async def delete_model_set(set_id: str):
     del model_sets[set_id]
     active = await cfg.get_active_model_set()
     if active == set_id:
-        await cfg.set_active_model_set("free")
+        # Fall back to first available model set instead of hardcoded "free"
+        remaining_sets = list(model_sets.keys())
+        if remaining_sets:
+            await cfg.set_active_model_set(remaining_sets[0])
+        else:
+            # This should not happen since built-in sets cannot be deleted
+            await cfg.set_active_model_set("free")
     await cfg.set_model_sets(model_sets)
     return {"ok": True}
 
@@ -348,6 +506,24 @@ async def submit_feedback(
             claim_corrections=[c.model_dump() for c in request.claim_corrections] if request.claim_corrections else None,
             user_id=request.user_id,
         )
+        # Update model reliability from feedback
+        try:
+            conversation = await storage.get_conversation_async(conversation_id)
+            if conversation and message_index < len(conversation.get("messages", [])):
+                message = conversation["messages"][message_index]
+                if message.get("metadata") and message["metadata"].get("aggregate_rankings"):
+                    for ranking in message["metadata"]["aggregate_rankings"]:
+                        model = ranking.get("model")
+                        if model:
+                            update_from_feedback(
+                                model=model,
+                                rating=request.rating,
+                                claim_corrections=[c.model_dump() for c in request.claim_corrections] if request.claim_corrections else [],
+                            )
+        except Exception as e:
+            # Log but don't fail the feedback submission
+            print(f"Warning: Failed to update reliability from feedback: {e}")
+        
         return {"ok": True, "feedback": entry}
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
@@ -432,62 +608,8 @@ async def list_available_models():
     all_models = []
 
     for provider_name, provider in prov.PROVIDERS.items():
-        api_key = prov.get_provider_api_key(provider)
-        if not api_key and provider_name != "openrouter":
-            continue
-
-        try:
-            # Derive models endpoint from base_url
-            base = provider["base_url"]
-            if base.endswith("/chat/completions"):
-                models_url = base.replace("/chat/completions", "/models")
-            elif base.endswith("/v1/chat/completions"):
-                models_url = base.replace("/v1/chat/completions", "/v1/models")
-            else:
-                models_url = base.rstrip("/") + "/models"
-
-            headers = {}
-            if api_key:
-                headers["Authorization"] = f"Bearer {api_key}"
-
-            async with httpx.AsyncClient(timeout=30, proxy=_get_proxy_url(), trust_env=False) as client:
-                resp = await client.get(models_url, headers=headers)
-                if resp.status_code == 200:
-                    data = resp.json()
-                    # OpenAI-compatible format: { "data": [{ "id": "...", "name": "..." }] }
-                    for m in data.get("data", []):
-                        model_id = m.get("id", "")
-                        if model_id:
-                            all_models.append({
-                                "id": f"{provider_name}/{model_id}",
-                                "name": m.get("name", model_id),
-                                "provider": provider_name,
-                                "pricing": m.get("pricing", {}),
-                                "context_length": m.get("context_length"),
-                            })
-                else:
-                    # Fallback: use configured model if models endpoint fails
-                    model_id = provider.get("model", "")
-                    if model_id:
-                        all_models.append({
-                            "id": f"{provider_name}/{model_id}",
-                            "name": model_id,
-                            "provider": provider_name,
-                            "pricing": {},
-                            "context_length": None,
-                        })
-        except Exception as e:
-            print(f"Error fetching models from {provider_name}: {e}")
-            # Fallback: use configured model
-            model_id = provider.get("model", "")
-            if model_id:
-                all_models.append({
-                    "id": f"{provider_name}/{model_id}",
-                    "name": model_id,
-                    "provider": provider_name,
-                    "pricing": {},
-                    "context_length": None,
-                })
+        models = await _fetch_provider_models(provider_name, provider)
+        all_models.extend(models)
 
     # Build a lookup of individual model context_lengths
     model_ctx = {m["id"]: m["context_length"] for m in all_models if m["context_length"] is not None}
@@ -530,38 +652,15 @@ async def openai_list_models():
     
     # Add individual models from providers
     for provider_name, provider in prov.PROVIDERS.items():
-        api_key = prov.get_provider_api_key(provider)
-        if not api_key and provider_name != "openrouter":
-            continue
-        
-        try:
-            base = provider["base_url"]
-            if base.endswith("/chat/completions"):
-                models_url = base.replace("/chat/completions", "/models")
-            elif base.endswith("/v1/chat/completions"):
-                models_url = base.replace("/v1/chat/completions", "/v1/models")
-            else:
-                models_url = base.rstrip("/") + "/models"
-
-            headers = {}
-            if api_key:
-                headers["Authorization"] = f"Bearer {api_key}"
-
-            async with httpx.AsyncClient(timeout=30, proxy=_get_proxy_url(), trust_env=False) as client:
-                resp = await client.get(models_url, headers=headers)
-                if resp.status_code == 200:
-                    data = resp.json()
-                    for m in data.get("data", []):
-                        model_id = m.get("id", "")
-                        if model_id:
-                            models.append(OpenAIModel(
-                                id=f"{provider_name}/{model_id}",
-                                object="model",
-                                created=current_time,
-                                owned_by=provider_name
-                            ))
-        except Exception as e:
-            print(f"Error fetching models from {provider_name}: {e}")
+        provider_models = await _fetch_provider_models(provider_name, provider)
+        current_time = int(time.time())
+        for m in provider_models:
+            models.append(OpenAIModel(
+                id=m["id"],
+                object="model",
+                created=current_time,
+                owned_by=provider_name
+            ))
     
     return OpenAIModelList(object="list", data=models)
 
@@ -599,7 +698,10 @@ async def openai_chat_completions(request: OpenAIChatCompletionRequest, x_sessio
     async def run_council() -> str:
         # Convert Pydantic models to dicts for JSON serialization
         msgs = [msg.model_dump() for msg in request.messages]
-        # Use X-Session-ID as conversation_id for session tracking (if valid UUID)
+        # Use X-Session-ID as conversation_id for MODEL SESSION TRACKING ONLY.
+        # This is used for model session continuity (e.g., local models that maintain state).
+        # It does NOT grant access to conversation data or storage operations.
+        # The session ID is only passed to get_or_create_model_session_async for model session tracking.
         conversation_id = x_session_id if x_session_id and _is_valid_uuid(x_session_id) else None
         stage1_results, session_ids = await stage1_collect_responses(
             msgs, council_models,
@@ -637,8 +739,8 @@ async def openai_chat_completions(request: OpenAIChatCompletionRequest, x_sessio
             try:
                 final_response = await run_council()
             except Exception as e:
-                print(f"[OPENAI] Error: {e}\n{traceback.format_exc()}", flush=True)
-                final_response = f"Error: council run failed ({e})"
+                print(f"[OPENAI] Error: {sanitize_error_message(str(e))}\n{traceback.format_exc()}", flush=True)
+                final_response = f"Error: council run failed ({sanitize_error_message(str(e))})"
 
             content_chunk = {
                 "id": completion_id,
@@ -669,7 +771,7 @@ async def openai_chat_completions(request: OpenAIChatCompletionRequest, x_sessio
     except HTTPException:
         raise
     except Exception as e:
-        print(f"[OPENAI] Error: {e}\n{traceback.format_exc()}", flush=True)
+        print(f"[OPENAI] Error: {sanitize_error_message(str(e))}\n{traceback.format_exc()}", flush=True)
         raise HTTPException(status_code=500, detail="Internal server error")
 
     return {

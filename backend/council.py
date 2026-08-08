@@ -142,19 +142,49 @@ async def stage1_collect_responses(
             confidence = None
             key_claims = []
             uncertainties = []
-            try:
-                # Look for JSON object in response
-                json_start = content.find('{')
-                json_end = content.rfind('}') + 1
-                if json_start >= 0 and json_end > json_start:
-                    potential_json = content[json_start:json_end]
-                    parsed = json.loads(potential_json)
+            
+            def try_parse_json(text: str) -> Optional[dict]:
+                """Try to parse text as JSON, return dict if valid and has expected structure."""
+                try:
+                    parsed = json.loads(text)
                     if isinstance(parsed, dict):
+                        return parsed
+                except (json.JSONDecodeError, ValueError):
+                    pass
+                return None
+            
+            # Strategy 1: Try parsing entire response as JSON
+            parsed = try_parse_json(content)
+            if parsed:
+                confidence = parsed.get('confidence')
+                key_claims = parsed.get('key_claims', []) or []
+                uncertainties = parsed.get('uncertainties', []) or []
+            else:
+                # Strategy 2: Look for JSON object with expected fields
+                # Find all JSON-like objects in the response
+                import re
+                # Match JSON objects that might contain confidence/key_claims/uncertainties
+                json_pattern = r'\{[^{}]*(?:"confidence"|"key_claims"|"uncertainties")[^{}]*\}'
+                matches = re.findall(json_pattern, content)
+                for match in matches:
+                    parsed = try_parse_json(match)
+                    if parsed and ('confidence' in parsed or 'key_claims' in parsed or 'uncertainties' in parsed):
                         confidence = parsed.get('confidence')
                         key_claims = parsed.get('key_claims', []) or []
                         uncertainties = parsed.get('uncertainties', []) or []
-            except (json.JSONDecodeError, ValueError):
-                pass
+                        break
+                
+                # Strategy 3: Fallback to original method (first { to last })
+                if confidence is None and not key_claims and not uncertainties:
+                    json_start = content.find('{')
+                    json_end = content.rfind('}') + 1
+                    if json_start >= 0 and json_end > json_start:
+                        potential_json = content[json_start:json_end]
+                        parsed = try_parse_json(potential_json)
+                        if parsed:
+                            confidence = parsed.get('confidence')
+                            key_claims = parsed.get('key_claims', []) or []
+                            uncertainties = parsed.get('uncertainties', []) or []
             
             # Low confidence flag
             low_confidence = confidence is not None and confidence < 0.4

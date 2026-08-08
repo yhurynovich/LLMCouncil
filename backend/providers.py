@@ -18,6 +18,7 @@ DEFAULT_PROVIDERS = {
         "stream": True,
         "description": "OpenRouter marketplace (local proxy)",
         "session_support": False,
+        "timeout": 120.0,
     },
     "openrouter_direct": {
         "base_url": "https://openrouter.ai/api/v1/chat/completions",
@@ -25,6 +26,7 @@ DEFAULT_PROVIDERS = {
         "stream": True,
         "description": "OpenRouter marketplace",
         "session_support": False,
+        "timeout": 120.0,
     },
     "deepseek-free": {
         "base_url": "http://192.168.31.66:8601/v1/chat/completions",
@@ -34,6 +36,7 @@ DEFAULT_PROVIDERS = {
         "description": "DeepSeek Reasoner Search — local deployment",
         "session_support": True,
         "session_param": "session_id",
+        "timeout": 120.0,
     },
     "qwen-free": {
         "base_url": "http://192.168.31.66:8600/api/chat/completions",
@@ -43,6 +46,7 @@ DEFAULT_PROVIDERS = {
         "description": "Qwen 3.7 Max — local deployment",
         "session_support": True,
         "session_param": "session_id",
+        "timeout": 120.0,
     },
     "glmkimi-free": {
         "base_url": "http://192.168.31.66:3364/v1/chat/completions",
@@ -52,6 +56,7 @@ DEFAULT_PROVIDERS = {
         "description": "GLM Kimi K2.5 — local deployment",
         "session_support": True,
         "session_param": "session_id",
+        "timeout": 120.0,
     },
 }
 

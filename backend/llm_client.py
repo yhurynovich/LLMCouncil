@@ -85,8 +85,8 @@ async def query_model(
         logger.error("Unknown provider '%s' for model '%s'", provider_name, model)
         return None
 
-    # Extract timeout from kwargs, default to 120.0
-    timeout = kwargs.get("timeout", 120.0)
+    # Use provider's configured timeout, then kwargs override, then default 120.0
+    timeout = kwargs.get("timeout", provider.get("timeout", 120.0))
 
     api_key = get_provider_api_key(provider)
     base_url = provider["base_url"]
