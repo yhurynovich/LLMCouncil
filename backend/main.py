@@ -34,6 +34,8 @@ from .council import (
     stage3_synthesize_final,
     calculate_aggregate_rankings,
 )
+from .metrics import get_metrics_summary
+from .feedback import add_feedback, get_feedback_for_conversation
 from .web_search import close_searxng_client
 
 
@@ -150,6 +152,17 @@ class UpdateProviderRequest(BaseModel):
     api_key_env: Optional[str] = None
     stream: Optional[bool] = None
     description: Optional[str] = None
+
+
+class ClaimCorrection(BaseModel):
+    claim: str
+    correction: str
+
+
+class FeedbackRequest(BaseModel):
+    rating: str  # "up" or "down"
+    claim_corrections: Optional[List[ClaimCorrection]] = None
+    user_id: Optional[str] = None
 
 class RenameConversationRequest(BaseModel):
     title: str
@@ -299,6 +312,54 @@ async def delete_model_set(set_id: str):
         await cfg.set_active_model_set("free")
     await cfg.set_model_sets(model_sets)
     return {"ok": True}
+
+
+# ── Metrics & Observability ───────────────────────────────────────────────────
+
+@app.get("/api/metrics/summary", tags=["Metrics"])
+async def metrics_summary():
+    """Return aggregated metrics summary for all stages and models."""
+    return get_metrics_summary()
+
+
+# ── Feedback ──────────────────────────────────────────────────────────────────
+
+@app.post("/api/conversations/{conversation_id}/messages/{message_index}/feedback", tags=["Feedback"])
+async def submit_feedback(
+    conversation_id: str,
+    message_index: int,
+    request: FeedbackRequest,
+):
+    """Submit feedback for a council response.
+    
+    Args:
+        conversation_id: UUID of the conversation
+        message_index: Index of the assistant message (0-based)
+        request: FeedbackRequest with rating and optional claim corrections
+    
+    Returns:
+        The created feedback entry
+    """
+    try:
+        entry = add_feedback(
+            conversation_id=conversation_id,
+            message_index=message_index,
+            rating=request.rating,
+            claim_corrections=[c.model_dump() for c in request.claim_corrections] if request.claim_corrections else None,
+            user_id=request.user_id,
+        )
+        return {"ok": True, "feedback": entry}
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to save feedback: {e}")
+
+
+@app.get("/api/conversations/{conversation_id}/feedback", tags=["Feedback"])
+async def get_conversation_feedback(conversation_id: str):
+    """Get all feedback for a conversation."""
+    feedback = get_feedback_for_conversation(conversation_id)
+    return {"conversation_id": conversation_id, "feedback": feedback}
 
 
 # ── Providers ──────────────────────────────────────────────────────────────

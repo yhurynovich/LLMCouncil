@@ -2,15 +2,64 @@
 
 import re
 import uuid
+import time
+import json
 from collections import defaultdict
 from typing import List, Dict, Any, Tuple, Optional, Union
 from .llm_client import query_models_parallel, query_model
 from .config import get_council_models, get_chairman_model, get_council_models_sync, get_chairman_model_sync
 from .uploads import read_file_content, get_image_base64
 from .storage import get_or_create_model_session_async
+from .metrics import (
+    log_stage_metric,
+    log_ranking_metric,
+    log_synthesis_metric,
+)
+from .reliability import (
+    compute_weight,
+    normalize_weights,
+    update_from_stage1,
+    update_from_stage2,
+    update_from_synthesis,
+)
 
 FINAL_RANKING_TOKEN = "FINAL RANKING:"
 MAX_RESPONSE_CHARS = 3000
+
+# Unique delimiters for prompt injection protection
+RESPONSE_START_DELIMITER = "<<<BEGIN_RESPONSE_"
+RESPONSE_END_DELIMITER = ">>>"
+
+
+def sanitize_for_prompt(text: str) -> str:
+    """
+    Sanitize model output before embedding in prompts to prevent injection.
+    Escapes delimiter patterns and strips potential injection attempts.
+    """
+    if not text:
+        return ""
+    # Escape our unique delimiters
+    text = text.replace("<<<BEGIN_RESPONSE_", "\\<<<BEGIN_RESPONSE_")
+    text = text.replace(">>>", "\\>>>")
+    # Strip common injection patterns
+    injection_patterns = [
+        r"ignore\s+(?:previous|above|all)\s+instructions?",
+        r"disregard\s+(?:previous|above|all)\s+instructions?",
+        r"forget\s+(?:previous|above|all)\s+instructions?",
+        r"system\s*[:\-]\s*",
+        r"assistant\s*[:\-]\s*",
+        r"user\s*[:\-]\s*",
+        r"<\|.*?\|>",  # Special tokens
+    ]
+    for pattern in injection_patterns:
+        text = re.sub(pattern, "[INJECTION_BLOCKED]", text, flags=re.IGNORECASE)
+    return text
+
+
+def build_response_block(label: str, content: str) -> str:
+    """Build a safely delimited response block for embedding in prompts."""
+    sanitized = sanitize_for_prompt(content)
+    return f"{RESPONSE_START_DELIMITER}{label}>>>\n{sanitized}\n{RESPONSE_START_DELIMITER}{label}END>>>"
 
 
 def build_message_with_files(user_query: str, files: list) -> Union[str, List[Dict[str, Any]]]:
@@ -80,14 +129,81 @@ async def stage1_collect_responses(
 
     stage1_results = []
     for model, response in responses.items():
+        start_time = time.perf_counter()
         if response is not None and "error" not in response:
+            content = response.get('content', '')
+            response_time = response.get('response_time') or (time.perf_counter() - start_time)
+            # Check for reasoning markers
+            reasoning_markers = any(marker in content.lower() for marker in [
+                "therefore", "because", "evidence suggests", "step 1", "first,",
+                "reasoning:", "analysis:", "conclusion:"
+            ])
+            # Try to extract structured JSON (confidence, key_claims, uncertainties)
+            confidence = None
+            key_claims = []
+            uncertainties = []
+            try:
+                # Look for JSON object in response
+                json_start = content.find('{')
+                json_end = content.rfind('}') + 1
+                if json_start >= 0 and json_end > json_start:
+                    potential_json = content[json_start:json_end]
+                    parsed = json.loads(potential_json)
+                    if isinstance(parsed, dict):
+                        confidence = parsed.get('confidence')
+                        key_claims = parsed.get('key_claims', []) or []
+                        uncertainties = parsed.get('uncertainties', []) or []
+            except (json.JSONDecodeError, ValueError):
+                pass
+            
+            # Low confidence flag
+            low_confidence = confidence is not None and confidence < 0.4
+            
+            log_stage_metric(
+                stage=1,
+                model=model,
+                success=True,
+                latency_ms=response_time * 1000 if isinstance(response_time, float) else 0,
+                response_length=len(content),
+                has_reasoning_markers=reasoning_markers,
+                parse_success=True,
+            )
+            # Update reliability from Stage 1
+            update_from_stage1(
+                model=model,
+                confidence=confidence,
+                has_reasoning_markers=reasoning_markers,
+                response_length=len(content),
+                latency_ms=response_time * 1000 if isinstance(response_time, float) else 0,
+                success=True,
+            )
             stage1_results.append({
                 "model": model,
-                "response": response.get('content', ''),
-                "response_time": response.get('response_time'),
+                "response": content,
+                "response_time": response_time,
+                "confidence": confidence,
+                "key_claims": key_claims,
+                "uncertainties": uncertainties,
+                "low_confidence": low_confidence,
             })
         else:
             error_msg = response.get("error", "Model failed to respond") if response else "Model failed to respond"
+            log_stage_metric(
+                stage=1,
+                model=model,
+                success=False,
+                latency_ms=(time.perf_counter() - start_time) * 1000,
+                error=error_msg,
+            )
+            # Update reliability for failed response
+            update_from_stage1(
+                model=model,
+                confidence=None,
+                has_reasoning_markers=False,
+                response_length=0,
+                latency_ms=(time.perf_counter() - start_time) * 1000,
+                success=False,
+            )
             stage1_results.append({
                 "model": model,
                 "response": None,
@@ -120,8 +236,9 @@ async def stage2_collect_rankings(
     def _truncate(text: str) -> str:
         return text[:MAX_RESPONSE_CHARS] + "\n[truncated]" if len(text) > MAX_RESPONSE_CHARS else text
 
+    # Build sanitized, delimited response blocks for injection protection
     responses_text = "\n\n".join([
-        f"Response {label}:\n{_truncate(result['response'])}"
+        build_response_block(label, _truncate(result['response']))
         for label, result in zip(labels, successful_results)
     ])
 
@@ -142,7 +259,15 @@ Here are the responses from different models (anonymized):
 {responses_text}
 
 Your task:
-1. First, evaluate each response individually. For each response, explain what it does well and what it does poorly.
+1. First, evaluate each response individually across these FIVE dimensions (score each 0-10):
+   - FACTUAL ACCURACY: Correctness of claims, no hallucinations, proper evidence
+   - COMPLETENESS: Addresses all aspects of the question, no missing key points
+   - REASONING QUALITY: Logical flow, step-by-step thinking, evidence use
+   - CLARITY & UTILITY: Actionable, well-structured, appropriate tone, useful
+   - NOVELTY: Unique insights vs. generic boilerplate, added value
+
+   For each response, provide a brief assessment per dimension with scores.
+
 2. Then, at the very end of your response, provide a final ranking.
 
 IMPORTANT: Your final ranking MUST be formatted EXACTLY as follows:
@@ -153,14 +278,23 @@ IMPORTANT: Your final ranking MUST be formatted EXACTLY as follows:
 
 Example of the correct format for your ENTIRE response:
 
-Response R1 provides good detail on X but misses Y...
-Response R2 is accurate but lacks depth on Z...
-Response R3 offers the most comprehensive answer...
+Response R1:
+  Factual Accuracy: 8/10 - Correct claims, minor omission
+  Completeness: 7/10 - Misses edge case
+  Reasoning Quality: 8/10 - Clear logic
+  Clarity & Utility: 9/10 - Well structured
+  Novelty: 6/10 - Standard approach
+
+Response R2:
+  Factual Accuracy: 9/10 - Well evidenced
+  Completeness: 9/10 - Comprehensive
+  Reasoning Quality: 9/10 - Excellent step-by-step
+  Clarity & Utility: 8/10 - Good structure
+  Novelty: 7/10 - Some unique insights
 
 FINAL RANKING:
-1. Response R3
+1. Response R2
 2. Response R1
-3. Response R2
 
 Now provide your evaluation and ranking:"""
 
@@ -180,15 +314,46 @@ Now provide your evaluation and ranking:"""
     responses = await query_models_parallel(models, ranking_messages, temperature=temperature, max_tokens=max_tokens, session_ids=ranking_session_ids)
 
     stage2_results = []
+    parsed_rankings = {}
     for model, response in responses.items():
         if response is not None:
             full_text = response.get('content', '')
             parsed = parse_ranking_from_text(full_text)
+            log_ranking_metric(
+                model=model,
+                success=True,
+                latency_ms=response.get('response_time', 0) * 1000 if response.get('response_time') else 0,
+                parsed_ranking_count=len(parsed),
+                parse_success=len(parsed) > 0,
+            )
             stage2_results.append({
                 "model": model,
                 "ranking": full_text,
                 "parsed_ranking": parsed
             })
+            if parsed:
+                parsed_rankings[model] = parsed
+        else:
+            log_ranking_metric(
+                model=model,
+                success=False,
+                latency_ms=0,
+                error=response.get('error', 'Unknown error') if response else 'No response',
+            )
+
+    # Compute aggregate ranking for reliability update
+    aggregate_rankings = calculate_aggregate_rankings(stage2_results, label_to_model)
+    aggregate_order = [item['model'] for item in aggregate_rankings if item['rankings_count'] > 0]
+    
+    # Update reliability from Stage 2 (agreement with aggregate)
+    for model, parsed in parsed_rankings.items():
+        update_from_stage2(
+            model=model,
+            parsed_ranking=parsed,
+            aggregate_ranking=aggregate_order,
+            success=True,
+            latency_ms=0,
+        )
 
     return stage2_results, label_to_model, ranking_session_ids
 
@@ -208,9 +373,11 @@ async def stage3_synthesize_final(
     # Filter out failed models (those with response=None)
     successful_results = [r for r in stage1_results if r.get('response') is not None]
 
+    # Build sanitized Stage 1 responses for chairman (with unique labels for citation)
+    stage1_labels = [f"R{i + 1}" for i in range(len(successful_results))]
     stage1_text = "\n\n".join([
-        f"Model: {result['model']}\nResponse: {result['response']}"
-        for result in successful_results
+        build_response_block(label, result['response'])
+        for label, result in zip(stage1_labels, successful_results)
     ])
     stage2_text = "\n\n".join([
         f"Model: {result['model']}\nRanking: {result['ranking']}"
@@ -224,6 +391,25 @@ async def stage3_synthesize_final(
         if msg["role"] == "user":
             user_query = msg.get("content", "")
             break
+
+    # Compute aggregate confidence from Stage 1
+    confidences = [r.get('confidence') for r in successful_results if r.get('confidence') is not None]
+    aggregate_confidence = sum(confidences) / len(confidences) if confidences else None
+    all_low_confidence = all(r.get('low_confidence', False) for r in successful_results)
+
+    # If all models are low confidence or aggregate is very low, return early with uncertainty notice
+    if all_low_confidence or (aggregate_confidence is not None and aggregate_confidence < 0.3):
+        low_conf_msg = (
+            "Insufficient certainty to provide a reliable answer. "
+            "All responding models indicated low confidence in their responses. "
+            "Please consider rephrasing the question or providing more context."
+        )
+        return {
+            "model": chair if chair else "chairman",
+            "response": low_conf_msg,
+            "low_confidence": True,
+            "aggregate_confidence": aggregate_confidence,
+        }
 
     chairman_prompt = f"""You are the Chairman of an LLM Council. Multiple AI models have provided responses to a user's question, and then ranked each other's responses.
 
@@ -240,6 +426,18 @@ Your task as Chairman is to synthesize all of this information into a single, co
 - The peer rankings and what they reveal about response quality
 - Any patterns of agreement or disagreement
 
+CONFLICT RESOLUTION RULES:
+1. When responses disagree on facts: favor the response with better reasoning/evidence
+2. When responses complement: synthesize into comprehensive answer
+3. When rankings are split: explain why you favor one side
+4. Always cite which response(s) support each claim (use "Response R1", "Response R2")
+5. Flag any unresolved disagreements explicitly
+
+CITATION FORMAT (mandatory):
+- Every factual claim must cite source: [Response R1], [Response R3]
+- Disagreements: "Response R1 claims X, but Response R3 argues Y. I favor R3 because..."
+- End with: "Confidence: X/10" (X reflects synthesis certainty, not model confidence)
+
 Provide a clear, well-reasoned final answer that represents the council's collective wisdom:"""
 
     chairman_messages = [{"role": "user", "content": chairman_prompt}]
@@ -251,12 +449,41 @@ Provide a clear, well-reasoned final answer that represents the council's collec
     elif conversation_id:
         chairman_session_id = await get_or_create_model_session_async(conversation_id, chair)
     
+    start_time = time.perf_counter()
     response = await query_model(chair, chairman_messages, temperature=temperature, max_tokens=max_tokens, session_id=chairman_session_id)
+    latency_ms = (time.perf_counter() - start_time) * 1000
 
     if response is None:
+        log_synthesis_metric(
+            model=chair,
+            success=False,
+            latency_ms=latency_ms,
+            error="No response from chairman model",
+        )
         return {"model": chair, "response": "Error: Unable to generate final synthesis."}
 
-    return {"model": chair, "response": response.get('content', '')}
+    content = response.get('content', '')
+    # Check for citations
+    has_citations = bool(re.search(r'\[Response R\d+\]', content))
+    # Extract confidence score if present
+    confidence_score = None
+    conf_match = re.search(r'Confidence:\s*(\d+(?:\.\d+)?)', content)
+    if conf_match:
+        try:
+            confidence_score = float(conf_match.group(1))
+        except ValueError:
+            pass
+
+    log_synthesis_metric(
+        model=chair,
+        success=True,
+        latency_ms=latency_ms,
+        response_length=len(content),
+        has_citations=has_citations,
+        confidence_score=confidence_score,
+    )
+
+    return {"model": chair, "response": content}
 
 
 def parse_ranking_from_text(ranking_text: str) -> List[str]:
@@ -292,23 +519,63 @@ def parse_ranking_from_text(ranking_text: str) -> List[str]:
 
 def calculate_aggregate_rankings(
     stage2_results: List[Dict[str, Any]],
-    label_to_model: Dict[str, str]
+    label_to_model: Dict[str, str],
+    council_models: Optional[List[str]] = None,
 ) -> List[Dict[str, Any]]:
+    """Calculate weighted aggregate rankings using Borda count with reliability weights."""
     model_positions: dict[str, list[int]] = defaultdict(list)
+    ranker_models = set()
 
     for ranking in stage2_results:
         # Reuse stored parsed_ranking if available, else parse
         parsed = ranking.get('parsed_ranking') or parse_ranking_from_text(ranking['ranking'])
+        if not parsed:
+            continue
+        ranker_model = ranking['model']
+        ranker_models.add(ranker_model)
         for position, label in enumerate(parsed, start=1):
             if label in label_to_model:
                 model_positions[label_to_model[label]].append(position)
 
+    # Compute reliability weights for ranker models
+    if council_models:
+        # Normalize weights only for models that actually ranked
+        ranker_weights = normalize_weights(list(ranker_models))
+    else:
+        ranker_weights = {m: 1.0 for m in ranker_models}
+
     aggregate = []
     for model, positions in model_positions.items():
+        if not positions:
+            continue
+        # Weighted Borda count: each ranker gives (N - position) points weighted by reliability
+        n_models = len(label_to_model)
+        weighted_score = 0.0
+        total_weight = 0.0
+        
+        # We need to know which ranker gave which position
+        # Re-iterate to compute weighted Borda
+        for ranking in stage2_results:
+            ranker = ranking['model']
+            weight = ranker_weights.get(ranker, 1.0)
+            parsed = ranking.get('parsed_ranking') or parse_ranking_from_text(ranking['ranking'])
+            for position, label in enumerate(parsed, start=1):
+                if label in label_to_model and label_to_model[label] == model:
+                    # Borda score: (n_models - position) points
+                    borda_points = n_models - position
+                    weighted_score += weight * borda_points
+                    total_weight += weight
+        
+        avg_borda = weighted_score / total_weight if total_weight > 0 else 0
+        # Convert to average rank for compatibility (lower = better)
+        # Approximate: average_rank ≈ n_models + 1 - avg_borda
+        avg_rank = round(n_models + 1 - avg_borda, 2)
+        
         aggregate.append({
             "model": model,
-            "average_rank": round(sum(positions) / len(positions), 2) if positions else float('inf'),
-            "rankings_count": len(positions)
+            "average_rank": avg_rank,
+            "rankings_count": len(positions),
+            "weighted_score": round(avg_borda, 2),
         })
 
     # Include models with zero votes at the bottom
@@ -318,7 +585,8 @@ def calculate_aggregate_rankings(
             aggregate.append({
                 "model": model,
                 "average_rank": float('inf'),
-                "rankings_count": 0
+                "rankings_count": 0,
+                "weighted_score": 0.0,
             })
 
     aggregate.sort(key=lambda x: x['average_rank'])
