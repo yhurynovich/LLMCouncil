@@ -404,6 +404,15 @@ async def create_model_set(request: CreateModelSetRequest):
     return {"ok": True, "set_id": set_id}
 
 
+# ── Model Set Management ──────────────────────────────────────────────────────
+
+@app.post("/api/model-sets/admin/reload", tags=["Model Sets"])
+async def reload_model_sets():
+    """Force reload model sets from disk."""
+    await cfg.reload_model_sets()
+    return {"ok": True, "message": "Model sets reloaded from disk"}
+
+
 @app.put("/api/model-sets/{set_id}", tags=["Model Sets"])
 async def update_model_set(set_id: str, request: UpdateModelSetRequest):
     """Update an existing model set."""
