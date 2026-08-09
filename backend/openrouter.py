@@ -8,7 +8,7 @@ from typing import Any
 
 from .config import OPENROUTER_API_KEY, OPENROUTER_API_URL
 from .web_search import SEARCH_TOOL, handle_tool_call
-from .llm_client import _get_proxy_url
+from .llm_client import _get_proxy_url, MODELS_NO_TOOLS
 from .http_client import get_shared_client
 
 STAGGER_DELAY = 0.5  # seconds between each model request
@@ -49,14 +49,19 @@ async def query_model(
         "model": model,
         "messages": messages,
     }
-    if enable_search:
+    # Disable tools for models that don't support function calling
+    model_supports_tools = model not in MODELS_NO_TOOLS
+    if enable_search and model_supports_tools:
         payload["tools"] = [SEARCH_TOOL]
         payload["tool_choice"] = "auto"
+    elif enable_search and not model_supports_tools:
+        # Log that search is disabled for this model
+        print(f"[{model}] Web search disabled - model doesn't support function calling")
 
-    # Pass temperature and max_tokens if provided
-    if "temperature" in kwargs:
+    # Pass temperature and max_tokens if provided (and not None)
+    if kwargs.get("temperature") is not None:
         payload["temperature"] = kwargs["temperature"]
-    if "max_tokens" in kwargs:
+    if kwargs.get("max_tokens") is not None:
         payload["max_tokens"] = kwargs["max_tokens"]
 
     proxy_url = _get_proxy_url()

@@ -132,6 +132,12 @@ All ReactMarkdown components must be wrapped in `<div className="markdown-conten
 ### Model Configuration
 Models are hardcoded in `backend/config.py`. Chairman can be same or different from council members. The current default is Gemini as chairman per user preference.
 
+### Models Without Function Calling (`MODELS_NO_TOOLS`)
+Some models (e.g., nemotron) don't support function calling and return 400/500 errors when `tools` parameter is sent. Configured via `MODELS_NO_TOOLS` in `.env` (comma-separated):
+- Default: `nvidia/nemotron-3-super-120b-a12b:free,nvidia/nemotron-3-ultra-550b-a55b:free`
+- When enabled, these models skip web search (no tools sent)
+- Defined in `backend/llm_client.py` and used by `backend/openrouter.py`
+
 ## Common Gotchas
 
 1. **Module Import Errors**: Always run backend as `python -m backend.main` from project root, not from backend directory

@@ -18,6 +18,17 @@ logger = logging.getLogger(__name__)
 
 STAGGER_DELAY = 0.5
 
+# Models that don't support function calling (tools) - they return 400 if tools are sent
+# Configurable via MODELS_NO_TOOLS env var (comma-separated)
+_models_no_tools_env = os.getenv("MODELS_NO_TOOLS", "").strip()
+if _models_no_tools_env:
+    MODELS_NO_TOOLS = {m.strip() for m in _models_no_tools_env.split(",") if m.strip()}
+else:
+    MODELS_NO_TOOLS = {
+        "nvidia/nemotron-3-super-120b-a12b:free",
+        "nvidia/nemotron-3-ultra-550b-a55b:free",
+    }
+
 
 def _should_verify_ssl(base_url: str) -> bool:
     """Check if SSL verification should be enabled for the given URL.
@@ -119,13 +130,18 @@ async def query_model(
         payload[session_param] = session_id
 
     if enable_search and provider_name == "openrouter":
-        payload["tools"] = [SEARCH_TOOL]
-        payload["tool_choice"] = "auto"
+        # Disable tools for models that don't support function calling
+        model_supports_tools = model_id not in MODELS_NO_TOOLS
+        if model_supports_tools:
+            payload["tools"] = [SEARCH_TOOL]
+            payload["tool_choice"] = "auto"
+        else:
+            logger.info("[%s] Web search disabled - model doesn't support function calling", model)
 
-    # Pass temperature and max_tokens if provided
-    if "temperature" in kwargs:
+    # Pass temperature and max_tokens if provided (and not None)
+    if kwargs.get("temperature") is not None:
         payload["temperature"] = kwargs["temperature"]
-    if "max_tokens" in kwargs:
+    if kwargs.get("max_tokens") is not None:
         payload["max_tokens"] = kwargs["max_tokens"]
 
     # Determine SSL verification based on URL (disable for HTTP to private IPs)

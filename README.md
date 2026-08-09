@@ -59,6 +59,7 @@ When you submit a query:
 - **SOCKS/HTTP proxy support** — works behind corporate proxies
 - **OpenAPI documentation** — full API docs at `/docs`
 - **JSON storage** — conversations persisted in `data/conversations/`
+- **Models without function calling** — configurable via `MODELS_NO_TOOLS` in `.env` (e.g., nemotron models that don't support tools)
 
 ### Model Context Protocol (MCP) Server
 - **MCP Server** — exposes the LLM Council as an MCP server with stdio transport
@@ -110,6 +111,10 @@ VITE_BACKEND_PORT=8001
 # If set, the frontend will require these credentials to access the UI
 # VITE_AUTH_USERNAME=admin
 # VITE_AUTH_PASSWORD=changeme
+
+# Optional — models that don't support function calling (tools)
+# Comma-separated list of model IDs (default: nemotron models)
+# MODELS_NO_TOOLS=nvidia/nemotron-3-super-120b-a12b:free,nvidia/nemotron-3-ultra-550b-a55b:free
 ```
 
 ### 3. Configure Providers (Optional)
