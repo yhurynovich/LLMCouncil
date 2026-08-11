@@ -28,10 +28,12 @@ RUN uv sync --no-dev --frozen && uv pip install beautifulsoup4
 # Copy the rest of the source with correct ownership
 COPY --chown=${UID}:${GID} backend/ ./backend/
 COPY --chown=${UID}:${GID} main.py ./
+COPY --chown=${UID}:${GID} docker-entrypoint.sh ./
+RUN chmod +x ./docker-entrypoint.sh
 
 # Ensure the data directory exists
 RUN mkdir -p /app/data/conversations /app/data/uploads
 
-EXPOSE 8001
+EXPOSE 8001 8002
 
-CMD ["uv", "run", "python", "-m", "backend.main"]
+CMD ["./docker-entrypoint.sh"]
