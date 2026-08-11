@@ -228,6 +228,8 @@ async def query_model(
         error_msg = str(e)
         error_msg = re.sub(r'(Bearer\s+)\S+', r'\1[REDACTED]', error_msg)
         error_msg = re.sub(r'sk-[a-zA-Z0-9]{20,}', '[REDACTED]', error_msg)
+        if not error_msg.strip():
+            error_msg = "Model failed to respond"
         logger.error("Error querying %s: %s", model, error_msg)
         return {"error": error_msg}
 
@@ -252,7 +254,15 @@ async def query_models_parallel(
         for i, model in enumerate(models)
     ]
     results = await asyncio.gather(*tasks, return_exceptions=True)
-    return {
-        model: (res if not isinstance(res, Exception) else {"error": str(res)})
-        for model, res in zip(models, results)
-    }
+    output = {}
+    for model, res in zip(models, results):
+        if isinstance(res, Exception):
+            output[model] = {"error": str(res)}
+        elif res is None:
+            output[model] = {"error": "Model failed to respond"}
+        elif isinstance(res, dict) and res.get("error", "").strip() == "":
+            # Sanitize empty error strings
+            output[model] = {"error": "Model failed to respond"}
+        else:
+            output[model] = res
+    return output

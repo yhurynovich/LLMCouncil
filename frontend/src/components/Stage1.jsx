@@ -4,6 +4,8 @@ import remarkGfm from 'remark-gfm';
 import rehypeSanitize from 'rehype-sanitize';
 import './Stage1.css';
 
+const hasError = (resp) => resp.error && String(resp.error).trim() !== '';
+
 export default function Stage1({ responses }) {
   const [activeTab, setActiveTab] = useState(0);
   const [expandedError, setExpandedError] = useState(null);
@@ -32,10 +34,10 @@ export default function Stage1({ responses }) {
         {responses.map((resp, index) => (
           <button
             key={index}
-            className={`tab ${activeTab === index ? 'active' : ''} ${resp.error ? 'error' : ''}`}
+            className={`tab ${activeTab === index ? 'active' : ''} ${hasError(resp) ? 'error' : ''}`}
             onClick={() => {
               setActiveTab(index);
-              if (resp.error) {
+              if (hasError(resp)) {
                 handleErrorClick(index);
               } else {
                 setExpandedError(null);
@@ -43,8 +45,8 @@ export default function Stage1({ responses }) {
             }}
           >
             {resp.model ? (resp.model.split('/')[1] || resp.model) : 'Unknown'}
-            {resp.error && <span className="error-indicator">!</span>}
-            {!resp.error && resp.response_time != null && (
+            {hasError(resp) && <span className="error-indicator">!</span>}
+            {!hasError(resp) && resp.response_time != null && (
               <span className="tab-time">{formatTime(resp.response_time)}</span>
             )}
           </button>
@@ -52,7 +54,7 @@ export default function Stage1({ responses }) {
       </div>
 
       <div className="tab-content">
-        {responses[safeIndex]?.error ? (
+        {hasError(responses[safeIndex]) ? (
           <div className="error-content">
             <div className="model-name error">
               {responses[safeIndex]?.model || 'Unknown'}

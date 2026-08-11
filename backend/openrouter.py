@@ -172,7 +172,12 @@ async def query_models_parallel(
         for i, model in enumerate(models)
     ]
     results = await asyncio.gather(*tasks, return_exceptions=True)
-    return {
-        model: (None if isinstance(res, Exception) else res)
-        for model, res in zip(models, results)
-    }
+    output = {}
+    for model, res in zip(models, results):
+        if isinstance(res, Exception):
+            output[model] = {"error": str(res)}
+        elif res is None:
+            output[model] = {"error": "Model failed to respond"}
+        else:
+            output[model] = res
+    return output
