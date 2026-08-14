@@ -19,64 +19,43 @@ DEFAULT_MODEL_SETS = {
     "search": {
         "label": "Internet search",
         "icon": "WWW",
-        "description": "Models with web search capabilities.",
+        "description": "",
         "council": [
             "openrouter/nvidia/nemotron-3-super-120b-a12b:free",
             "deepseek-free/deepseek-reasoner-search",
             "qwen-free/qwen3.7-plus",
-            "openrouter/google/gemma-4-31b-it:free",
-            "glmkimi-free/glm-5-deepresearch",
+            "openrouter/google/gemma-4-26b-a4b-it:free",
+            "glmkimi-free/kimi-k2.6-search",
+            "glmkimi-free/glm-5.2-search"
         ],
-        "chairman": "qwen-free/qwen3.7-max",
+        "chairman": "openrouter/nvidia/nemotron-3-super-120b-a12b:free"
     },
-    "free": {
-        "label": "Free Tier",
-        "icon": "FREE",
-        "description": "100% free models on OpenRouter. May be rate-limited.",
+    "code": {
+        "label": "Coding",
+        "icon": "CODE",
+        "description": "Models best for creating code",
         "council": [
-            "openrouter/openai/gpt-oss-120b:free",
-            "openrouter/meta-llama/llama-3.3-70b-instruct:free",
-            "openrouter/google/gemma-4-31b-it:free",
-            "openrouter/deepseek/deepseek-v4-flash:free",
+            "openrouter/cohere/north-mini-code:free",
+            "qwen-free/qwen3-coder-30b-a3b-instruct",
+            "deepseek-free/deepseek-v4-pro",
+            "openrouter/nvidia/nemotron-3-ultra-550b-a55b:free",
+            "glmkimi-free/glm-5.2-thinking",
+            "glmkimi-free/kimi-k2.7-code"
         ],
-        "chairman": "openrouter/openai/gpt-oss-120b:free",
+        "chairman": "openrouter/nvidia/nemotron-3-super-120b-a12b:free"
     },
-    "smart": {
-        "label": "Smartest",
-        "icon": "SMART",
-        "description": "Best available models. Requires OpenRouter credits.",
+    "think": {
+        "label": "think",
+        "icon": "think",
+        "description": "",
         "council": [
-            "openrouter/openai/gpt-4o",
-            "openrouter/anthropic/claude-sonnet-4-5",
-            "openrouter/google/gemini-2.5-flash",
-            "openrouter/x-ai/grok-3-mini",
+            "deepseek-free/deepseek-expert",
+            "qwen-free/qwen3.7-max",
+            "glmkimi-free/glm-5.2-thinking",
+            "glmkimi-free/kimi-k3"
         ],
-        "chairman": "openrouter/anthropic/claude-sonnet-4-5",
-    },
-    "reasonable": {
-        "label": "Reasonable",
-        "icon": "OK",
-        "description": "Good balance of quality and cost.",
-        "council": [
-            "openrouter/openai/gpt-4o-mini",
-            "openrouter/anthropic/claude-haiku-4-5",
-            "openrouter/google/gemini-2.5-flash",
-            "openrouter/meta-llama/llama-3.3-70b-instruct",
-        ],
-        "chairman": "openrouter/openai/gpt-4o-mini",
-    },
-    "privacy": {
-        "label": "Privacy First",
-        "icon": "PRIV",
-        "description": "EU-based or privacy-focused providers. No US Big Tech.",
-        "council": [
-            "openrouter/mistralai/mistral-large",
-            "openrouter/mistralai/mistral-small",
-            "openrouter/qwen/qwen-2.5-72b-instruct",
-            "openrouter/deepseek/deepseek-chat",
-        ],
-        "chairman": "openrouter/mistralai/mistral-large",
-    },
+        "chairman": "openrouter/nvidia/nemotron-3-ultra-550b-a55b:free"
+    }
 }
 
 MODEL_SETS_FILE = "data/model_sets.json"

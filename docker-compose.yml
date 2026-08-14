@@ -33,6 +33,7 @@ services:
       - ./data/uploads:/app/data/uploads
     ports:
       - "5174:8001"
+      - "5172:8002"
     networks:
       - llm-council
 
