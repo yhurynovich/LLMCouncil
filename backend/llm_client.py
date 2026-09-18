@@ -18,8 +18,9 @@ logger = logging.getLogger(__name__)
 
 STAGGER_DELAY = 0.5
 
-# Models that don't support function calling (tools) - they return 400 if tools are sent
+# Models that don't support function calling (tools) - they return 400/404 if tools are sent
 # Configurable via MODELS_NO_TOOLS env var (comma-separated)
+# Includes both OpenRouter Direct IDs (with provider prefix) and local OpenRouter proxy IDs (bare)
 _models_no_tools_env = os.getenv("MODELS_NO_TOOLS", "").strip()
 if _models_no_tools_env:
     MODELS_NO_TOOLS = {m.strip() for m in _models_no_tools_env.split(",") if m.strip()}
@@ -27,6 +28,9 @@ else:
     MODELS_NO_TOOLS = {
         "nvidia/nemotron-3-super-120b-a12b:free",
         "nvidia/nemotron-3-ultra-550b-a55b:free",
+        "nemotron-3-super-120b-a12b:free",
+        "qwen3.8-27b:free",
+        "glm-5.2:free",
     }
 
 
@@ -155,6 +159,16 @@ async def query_model(
     try:
         t0 = time.monotonic()
         resp = await client.post(base_url, headers=headers, json=payload, timeout=timeout)
+
+        # If tools were sent and the API rejected them (404/400), retry without tools.
+        # This handles OpenRouter-compatible proxies that list models as supporting
+        # tools in their /models endpoint but reject tool-bearing requests at runtime.
+        if resp.status_code in (400, 404) and 'tools' in payload:
+            logger.info("[%s] Retrying without tools after HTTP %d", model, resp.status_code)
+            payload.pop('tools', None)
+            payload.pop('tool_choice', None)
+            resp = await client.post(base_url, headers=headers, json=payload, timeout=timeout)
+
         resp.raise_for_status()
         data = resp.json()
 
@@ -260,9 +274,12 @@ async def query_models_parallel(
             output[model] = {"error": str(res)}
         elif res is None:
             output[model] = {"error": "Model failed to respond"}
-        elif isinstance(res, dict) and res.get("error", "").strip() == "":
-            # Sanitize empty error strings
-            output[model] = {"error": "Model failed to respond"}
+        elif isinstance(res, dict) and res.get("error", None) not in (None, ""):
+            # Result has an actual error key with non-empty value
+            output[model] = res
+        elif isinstance(res, dict) and "error" in res:
+            # Result has empty error key - treat as success (empty error means no error)
+            output[model] = res
         else:
             output[model] = res
     return output

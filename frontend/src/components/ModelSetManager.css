@@ -625,3 +625,66 @@
   background: rgba(146, 64, 14, 0.15);
   opacity: 1;
 }
+
+/* ── Council Tags ────────────────────────────────────────────────────────── */
+
+.msm-council-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-bottom: 8px;
+}
+
+.msm-council-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 12px;
+  font-family: monospace;
+  color: #1d4ed8;
+  background: #eff6ff;
+  border: 1px solid #bfdbfe;
+  border-radius: 4px;
+  padding: 2px 8px;
+}
+
+.msm-council-tag-remove {
+  background: none;
+  border: none;
+  border-radius: 3px;
+  cursor: pointer;
+  font-size: 12px;
+  line-height: 1;
+  color: #1d4ed8;
+  opacity: 0.6;
+  padding: 0 2px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+}
+
+.msm-council-tag-remove:hover {
+  background: rgba(29, 78, 212, 0.15);
+  opacity: 1;
+}
+
+/* ── Free Toggle ─────────────────────────────────────────────────────────── */
+
+.msm-free-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 12px;
+  color: #374151;
+  cursor: pointer;
+  padding: 0 4px;
+  white-space: nowrap;
+}
+
+.msm-free-toggle input[type="checkbox"] {
+  width: 14px;
+  height: 14px;
+  cursor: pointer;
+}

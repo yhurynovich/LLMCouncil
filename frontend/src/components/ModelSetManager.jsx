@@ -18,6 +18,7 @@ export default function ModelSetManager({ onBack }) {
   const [saving, setSaving] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const [providerFilter, setProviderFilter] = useState('');
+  const [freeOnly, setFreeOnly] = useState(false);
   const [providers, setProviders] = useState({});
   const [deleteConfirm, setDeleteConfirm] = useState(null);
 
@@ -54,10 +55,24 @@ export default function ModelSetManager({ onBack }) {
     }
   };
 
+  const isModelFree = (m) => {
+    if (m.id.endsWith(':free')) return true;
+    if (m.pricing && m.pricing.prompt !== undefined && m.pricing.completion !== undefined) {
+      const prompt = parseFloat(m.pricing.prompt);
+      const completion = parseFloat(m.pricing.completion);
+      if (prompt === 0 && completion === 0) return true;
+    }
+    if (m.provider && m.provider.includes('free')) return true;
+    return false;
+  };
+
   const filteredModels = useMemo(() => {
     let models = availableModels;
     if (providerFilter) {
       models = models.filter((m) => m.provider === providerFilter);
+    }
+    if (freeOnly) {
+      models = models.filter((m) => isModelFree(m));
     }
     if (searchQuery) {
       const q = searchQuery.toLowerCase();
@@ -68,7 +83,7 @@ export default function ModelSetManager({ onBack }) {
       );
     }
     return models;
-  }, [availableModels, searchQuery, providerFilter]);
+  }, [availableModels, searchQuery, providerFilter, freeOnly]);
 
   const startCreate = () => {
     setForm({
@@ -373,8 +388,34 @@ export default function ModelSetManager({ onBack }) {
                 placeholder="Search models..."
                 className="msm-search"
               />
+              <label className="msm-free-toggle">
+                <input
+                  type="checkbox"
+                  checked={freeOnly}
+                  onChange={(e) => setFreeOnly(e.target.checked)}
+                />
+                Free only
+              </label>
             </div>
           </div>
+
+          {form.council.length > 0 && (
+            <div className="msm-council-tags">
+              {form.council.map((m) => (
+                <span key={m} className="msm-council-tag">
+                  {m.substring(m.indexOf('/') + 1).replace(/:free$/, '') || m}
+                  <button
+                    type="button"
+                    className="msm-council-tag-remove"
+                    onClick={() => toggleModel(m)}
+                    title={`Remove ${m}`}
+                  >
+                    ×
+                  </button>
+                </span>
+              ))}
+            </div>
+          )}
 
           <div className="msm-model-list">
             {filteredModels.length === 0 && (
@@ -459,6 +500,14 @@ export default function ModelSetManager({ onBack }) {
               placeholder="Search models..."
               className="msm-search"
             />
+            <label className="msm-free-toggle">
+              <input
+                type="checkbox"
+                checked={freeOnly}
+                onChange={(e) => setFreeOnly(e.target.checked)}
+              />
+              Free only
+            </label>
           </div>
           <div className="msm-model-list">
             {filteredModels.filter((m) => !m.id.startsWith('set/')).length === 0 && (
