@@ -69,12 +69,18 @@ export default function ModelSetSelector({ onSetChange }) {
           <div className="tooltip-models">
             {sets[tooltip].council.map(m => (
               <div key={m} className="tooltip-model">
-                {m.split('/')[1]?.replace(/:free$/, '') ?? m}
+                {m.substring(m.indexOf('/') + 1).replace(/:free$/, '') || m}
               </div>
             ))}
           </div>
           <div className="tooltip-chairman">
-            👑 {sets[tooltip].chairman.split('/')[1]?.replace(/:free$/, '') ?? sets[tooltip].chairman}
+            👑 Council Chairs:
+            {(Array.isArray(sets[tooltip].chairman) ? sets[tooltip].chairman : [sets[tooltip].chairman]).map((m, i) => (
+              <div key={m} className="tooltip-model">
+                {m.substring(m.indexOf('/') + 1).replace(/:free$/, '') || m}
+                {i === 0 ? ' (primary)' : ' (fallback)'}
+              </div>
+            ))}
           </div>
           {active === tooltip && (
             <div className="tooltip-default">✓ Default (persists across sessions)</div>

@@ -7,7 +7,7 @@ import json
 from collections import defaultdict
 from typing import List, Dict, Any, Tuple, Optional, Union
 from .llm_client import query_models_parallel, query_model
-from .config import get_council_models, get_chairman_model, get_council_models_sync, get_chairman_model_sync
+from .config import get_council_models, get_chairman_model, get_chairman_models, get_council_models_sync, get_chairman_model_sync, get_chairman_models_sync, _normalize_chairman
 from .uploads import read_file_content, get_image_base64
 from .storage import get_or_create_model_session_async
 from .metrics import (
@@ -392,13 +392,13 @@ async def stage3_synthesize_final(
     messages: List[Dict[str, Any]],
     stage1_results: List[Dict[str, Any]],
     stage2_results: List[Dict[str, Any]],
-    chairman_model: Optional[str] = None,
+    chairman_model: Optional[Union[str, List[str]]] = None,
     temperature: Optional[float] = None,
     max_tokens: Optional[int] = None,
     conversation_id: Optional[str] = None,
     session_ids: Optional[Dict[str, str]] = None,
 ) -> Dict[str, Any]:
-    chair = chairman_model if chairman_model is not None else await get_chairman_model()
+    chairs = _normalize_chairman(chairman_model) if chairman_model is not None else await get_chairman_models()
 
     # Filter out failed models (those with response=None)
     successful_results = [r for r in stage1_results if r.get('response') is not None]
@@ -434,8 +434,9 @@ async def stage3_synthesize_final(
             "All responding models indicated low confidence in their responses. "
             "Please consider rephrasing the question or providing more context."
         )
+        primary_chair = chairs[0] if chairs else "chairman"
         return {
-            "model": chair if chair else "chairman",
+            "model": primary_chair,
             "response": low_conf_msg,
             "low_confidence": True,
             "aggregate_confidence": aggregate_confidence,
@@ -472,48 +473,81 @@ Provide a clear, well-reasoned final answer that represents the council's collec
 
     chairman_messages = [{"role": "user", "content": chairman_prompt}]
     
-    # Get session_id for chairman
-    chairman_session_id = None
-    if conversation_id and session_ids and chair in session_ids:
-        chairman_session_id = session_ids[chair]
-    elif conversation_id:
-        chairman_session_id = await get_or_create_model_session_async(conversation_id, chair)
-    
-    start_time = time.perf_counter()
-    response = await query_model(chair, chairman_messages, temperature=temperature, max_tokens=max_tokens, session_id=chairman_session_id)
-    latency_ms = (time.perf_counter() - start_time) * 1000
+    # Try each chairman model in order (failover)
+    last_error = None
+    for chair in chairs:
+        # Get session_id for this chairman
+        chairman_session_id = None
+        if conversation_id and session_ids and chair in session_ids:
+            chairman_session_id = session_ids[chair]
+        elif conversation_id:
+            chairman_session_id = await get_or_create_model_session_async(conversation_id, chair)
+        
+        start_time = time.perf_counter()
+        response = await query_model(chair, chairman_messages, temperature=temperature, max_tokens=max_tokens, session_id=chairman_session_id)
+        latency_ms = (time.perf_counter() - start_time) * 1000
 
-    if response is None:
+        if response is None:
+            last_error = "No response from chairman model"
+            log_synthesis_metric(
+                model=chair,
+                success=False,
+                latency_ms=latency_ms,
+                error=last_error,
+            )
+            continue
+
+        if "error" in response:
+            last_error = response["error"]
+            log_synthesis_metric(
+                model=chair,
+                success=False,
+                latency_ms=latency_ms,
+                error=last_error,
+            )
+            continue
+
+        content = response.get('content', '')
+        if not content.strip():
+            last_error = "Empty response from chairman model"
+            log_synthesis_metric(
+                model=chair,
+                success=False,
+                latency_ms=latency_ms,
+                error=last_error,
+            )
+            continue
+
+        # Check for citations
+        has_citations = bool(re.search(r'\[Response R\d+\]', content))
+        # Extract confidence score if present
+        confidence_score = None
+        conf_match = re.search(r'Confidence:\s*(\d+(?:\.\d+)?)', content)
+        if conf_match:
+            try:
+                confidence_score = float(conf_match.group(1))
+            except ValueError:
+                pass
+
         log_synthesis_metric(
             model=chair,
-            success=False,
+            success=True,
             latency_ms=latency_ms,
-            error="No response from chairman model",
+            response_length=len(content),
+            has_citations=has_citations,
+            confidence_score=confidence_score,
         )
-        return {"model": chair, "response": "Error: Unable to generate final synthesis."}
 
-    content = response.get('content', '')
-    # Check for citations
-    has_citations = bool(re.search(r'\[Response R\d+\]', content))
-    # Extract confidence score if present
-    confidence_score = None
-    conf_match = re.search(r'Confidence:\s*(\d+(?:\.\d+)?)', content)
-    if conf_match:
-        try:
-            confidence_score = float(conf_match.group(1))
-        except ValueError:
-            pass
+        return {"model": chair, "response": content}
 
+    # All chairman models failed
     log_synthesis_metric(
-        model=chair,
-        success=True,
-        latency_ms=latency_ms,
-        response_length=len(content),
-        has_citations=has_citations,
-        confidence_score=confidence_score,
+        model="all_chairmen_failed",
+        success=False,
+        latency_ms=0,
+        error=last_error or "No chairman models available",
     )
-
-    return {"model": chair, "response": content}
+    return {"model": "error", "response": f"Error: All chairman models failed. Last error: {last_error}"}
 
 
 def parse_ranking_from_text(ranking_text: str) -> List[str]:
@@ -632,9 +666,11 @@ Question: {user_query}
 Title:"""
 
     messages = [{"role": "user", "content": title_prompt}]
-    response = await query_model(await get_chairman_model(), messages, timeout=30.0)
+    chair_models = await get_chairman_models()
+    chair = chair_models[0] if chair_models else await get_chairman_model()
+    response = await query_model(chair, messages, timeout=30.0)
 
-    if response is None:
+    if response is None or "error" in response:
         return "New Conversation"
 
     title = response.get('content', 'New Conversation').strip().strip('"\'')

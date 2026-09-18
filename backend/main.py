@@ -87,11 +87,25 @@ async def _fetch_provider_models(provider_name: str, provider: Dict[str, Any]) -
             for m in data.get("data", []):
                 model_id = m.get("id", "")
                 if model_id:
+                    pricing = m.get("pricing", {})
+                    # Some OpenRouter-compatible proxies strip the :free
+                    # suffix from model IDs even when the model has free
+                    # pricing. Re-append it so the ID is distinct from the
+                    # paid variant and free-tier routing works correctly.
+                    if provider_name in ("openrouter", "openrouter_direct") and not model_id.endswith(":free"):
+                        prompt_price = pricing.get("prompt")
+                        completion_price = pricing.get("completion")
+                        if prompt_price is not None and completion_price is not None:
+                            try:
+                                if float(prompt_price) == 0 and float(completion_price) == 0:
+                                    model_id = model_id + ":free"
+                            except (ValueError, TypeError):
+                                pass
                     models.append({
                         "id": f"{provider_name}/{model_id}",
                         "name": m.get("name", model_id),
                         "provider": provider_name,
-                        "pricing": m.get("pricing", {}),
+                        "pricing": pricing,
                         "context_length": m.get("context_length"),
                     })
             return models
@@ -214,14 +228,14 @@ class CreateModelSetRequest(BaseModel):
     icon: str = ""
     description: str = ""
     council: List[str] = []
-    chairman: str = ""
+    chairman: List[str] = []
 
 class UpdateModelSetRequest(BaseModel):
     label: Optional[str] = None
     icon: Optional[str] = None
     description: Optional[str] = None
     council: Optional[List[str]] = None
-    chairman: Optional[str] = None
+    chairman: Optional[List[str]] = None
 
 class ConversationMetadata(BaseModel):
     id: str
@@ -372,22 +386,21 @@ async def create_model_set(request: CreateModelSetRequest):
         raise HTTPException(status_code=400, detail="council must contain at least one model")
     
     # Validate chairman
-    if not request.chairman:
-        raise HTTPException(status_code=400, detail="chairman is required")
+    if not request.chairman or not isinstance(request.chairman, list):
+        raise HTTPException(status_code=400, detail="chairman must be a non-empty list of model IDs")
+    if len(request.chairman) == 0:
+        raise HTTPException(status_code=400, detail="chairman must contain at least one model")
     
     # Validate all model IDs exist in providers
     model_sets = await cfg.get_model_sets()
-    providers = await prov.get_providers()
-    all_model_ids = set()
-    for p in providers.values():
-        if "model" in p:
-            all_model_ids.add(p["model"])
+    all_model_ids = await _get_all_model_ids()
     
     for model in request.council:
-        if model not in all_model_ids:
+        if not _is_valid_model_id(model, all_model_ids):
             raise HTTPException(status_code=400, detail=f"Invalid model ID in council: {model}")
-    if request.chairman not in all_model_ids:
-        raise HTTPException(status_code=400, detail=f"Invalid chairman model ID: {request.chairman}")
+    for model in request.chairman:
+        if not _is_valid_model_id(model, all_model_ids):
+            raise HTTPException(status_code=400, detail=f"Invalid chairman model ID: {model}")
     
     if set_id in model_sets:
         raise HTTPException(status_code=409, detail=f"Model set '{set_id}' already exists")
@@ -426,26 +439,19 @@ async def update_model_set(set_id: str, request: UpdateModelSetRequest):
     if request.council is not None:
         if not isinstance(request.council, list) or len(request.council) == 0:
             raise HTTPException(status_code=400, detail="council must be a non-empty list")
-        providers = await prov.get_providers()
-        all_model_ids = set()
-        for p in providers.values():
-            if "model" in p:
-                all_model_ids.add(p["model"])
+        all_model_ids = await _get_all_model_ids()
         for model in request.council:
-            if model not in all_model_ids:
+            if not _is_valid_model_id(model, all_model_ids):
                 raise HTTPException(status_code=400, detail=f"Invalid model ID in council: {model}")
         ms["council"] = request.council
     
     if request.chairman is not None:
-        if not request.chairman:
-            raise HTTPException(status_code=400, detail="chairman cannot be empty")
-        providers = await prov.get_providers()
-        all_model_ids = set()
-        for p in providers.values():
-            if "model" in p:
-                all_model_ids.add(p["model"])
-        if request.chairman not in all_model_ids:
-            raise HTTPException(status_code=400, detail=f"Invalid chairman model ID: {request.chairman}")
+        if not isinstance(request.chairman, list) or len(request.chairman) == 0:
+            raise HTTPException(status_code=400, detail="chairman must be a non-empty list")
+        all_model_ids = await _get_all_model_ids()
+        for model in request.chairman:
+            if not _is_valid_model_id(model, all_model_ids):
+                raise HTTPException(status_code=400, detail=f"Invalid chairman model ID: {model}")
         ms["chairman"] = request.chairman
     
     if request.label is not None:
@@ -612,6 +618,36 @@ async def delete_provider(name: str):
     return {"ok": True}
 
 
+async def _get_all_model_ids() -> set:
+    """Fetch all available model IDs from all providers.
+
+    Always includes provider-name prefixes (e.g. 'openrouter/') so that any
+    model from a known provider is accepted, even if the /models endpoint
+    is unreachable or doesn't list every model.
+    """
+    providers = await prov.get_providers()
+    all_ids = set()
+    for provider_name, provider in providers.items():
+        # Always accept any model under a known provider prefix
+        all_ids.add(f"{provider_name}/")
+        # Add specific models if the /models endpoint responds
+        models = await _fetch_provider_models(provider_name, provider)
+        for m in models:
+            all_ids.add(m["id"])
+    return all_ids
+
+
+def _is_valid_model_id(model: str, all_ids: set) -> bool:
+    """Check if a model ID is valid: exact match or provider-prefix fallback."""
+    if model in all_ids:
+        return True
+    if "/" in model:
+        prefix = model.split("/", 1)[0] + "/"
+        if prefix in all_ids:
+            return True
+    return False
+
+
 @app.get("/api/available-models", tags=["Models"])
 async def list_available_models():
     """Fetch available models from all providers."""
@@ -627,7 +663,7 @@ async def list_available_models():
     # Add model sets as selectable virtual models
     model_sets = await cfg.get_model_sets()
     for set_id, ms in model_sets.items():
-        set_model_ids = ms["council"] + [ms["chairman"]]
+        set_model_ids = ms["council"] + ms["chairman"]
         ctx_lengths = [model_ctx[mid] for mid in set_model_ids if mid in model_ctx]
         all_models.append({
             "id": f"set/{set_id}",

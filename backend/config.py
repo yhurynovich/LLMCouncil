@@ -28,7 +28,7 @@ DEFAULT_MODEL_SETS = {
             "glmkimi-free/kimi-k2.6-search",
             "glmkimi-free/glm-5.2-search"
         ],
-        "chairman": "openrouter/nvidia/nemotron-3-super-120b-a12b:free"
+        "chairman": ["openrouter/nvidia/nemotron-3-super-120b-a12b:free"]
     },
     "code": {
         "label": "Coding",
@@ -42,7 +42,7 @@ DEFAULT_MODEL_SETS = {
             "glmkimi-free/glm-5.2-thinking",
             "glmkimi-free/kimi-k2.7-code"
         ],
-        "chairman": "openrouter/nvidia/nemotron-3-super-120b-a12b:free"
+        "chairman": ["openrouter/nvidia/nemotron-3-super-120b-a12b:free"]
     },
     "think": {
         "label": "think",
@@ -54,7 +54,7 @@ DEFAULT_MODEL_SETS = {
             "glmkimi-free/glm-5.2-thinking",
             "glmkimi-free/kimi-k3"
         ],
-        "chairman": "openrouter/nvidia/nemotron-3-ultra-550b-a55b:free"
+        "chairman": ["openrouter/nvidia/nemotron-3-ultra-550b-a55b:free"]
     }
 }
 
@@ -76,6 +76,14 @@ def _get_providers() -> Dict[str, Any]:
     return PROVIDERS
 
 
+def _normalize_model_sets(sets: Dict[str, Any]) -> Dict[str, Any]:
+    """Normalize all model sets: ensure chairman is always a list."""
+    for set_id, ms in sets.items():
+        if "chairman" in ms:
+            ms["chairman"] = _normalize_chairman(ms["chairman"])
+    return sets
+
+
 async def _load_model_sets_async() -> Dict[str, Any]:
     """Load model sets from persisted file, falling back to defaults."""
     try:
@@ -83,10 +91,10 @@ async def _load_model_sets_async() -> Dict[str, Any]:
             import aiofiles
             async with aiofiles.open(MODEL_SETS_FILE, "r") as f:
                 content = await f.read()
-                return json.loads(content)
+                return _normalize_model_sets(json.loads(content))
     except (json.JSONDecodeError, OSError) as e:
         logger.error("Error loading model_sets: %s", e)
-    return dict(DEFAULT_MODEL_SETS)
+    return _normalize_model_sets(dict(DEFAULT_MODEL_SETS))
 
 
 async def _save_model_sets_async(sets: Dict[str, Any]) -> None:
@@ -127,8 +135,9 @@ async def set_model_sets(sets: Dict[str, Any]) -> Dict[str, Any]:
     """Update model sets atomically."""
     global _model_sets, _MODEL_SETS_SYNC
     async with _model_sets_lock:
-        await _save_model_sets_async(sets)
-        _model_sets = sets
+        normalized = _normalize_model_sets({k: dict(v) for k, v in sets.items()})
+        await _save_model_sets_async(normalized)
+        _model_sets = normalized
         _MODEL_SETS_SYNC = None  # Invalidate sync cache
     return _model_sets
 
@@ -197,7 +206,10 @@ async def get_active_set() -> Dict[str, Any]:
     """Get the currently active model set configuration."""
     active_id = await get_active_model_set()
     model_sets = await get_model_sets()
-    return model_sets[active_id]
+    active = model_sets[active_id]
+    active = dict(active)
+    active["chairman"] = _normalize_chairman(active.get("chairman", []))
+    return active
 
 
 async def get_council_models() -> List[str]:
@@ -206,10 +218,25 @@ async def get_council_models() -> List[str]:
     return active["council"]
 
 
-async def get_chairman_model() -> str:
-    """Get the chairman model for the active set."""
+def _normalize_chairman(chairman) -> List[str]:
+    """Normalize chairman to a list. Handles legacy string format."""
+    if isinstance(chairman, str):
+        return [chairman] if chairman else []
+    if isinstance(chairman, list):
+        return [m for m in chairman if m]
+    return []
+
+
+async def get_chairman_models() -> List[str]:
+    """Get the chairman models for the active set (ordered list for failover)."""
     active = await get_active_set()
-    return active["chairman"]
+    return _normalize_chairman(active.get("chairman", []))
+
+
+async def get_chairman_model() -> str:
+    """Get the primary chairman model for the active set (first of list)."""
+    models = await get_chairman_models()
+    return models[0] if models else ""
 
 
 # Backwards compatibility - synchronous wrappers (for non-async contexts)
@@ -218,10 +245,10 @@ def _load_model_sets_sync() -> Dict[str, Any]:
     if os.path.exists(MODEL_SETS_FILE):
         try:
             with open(MODEL_SETS_FILE, "r") as f:
-                return json.load(f)
+                return _normalize_model_sets(json.load(f))
         except (json.JSONDecodeError, OSError) as e:
             logger.error("Corrupt model_sets file: %s", e)
-    return dict(DEFAULT_MODEL_SETS)
+    return _normalize_model_sets(dict(DEFAULT_MODEL_SETS))
 
 
 def _save_model_sets_sync(sets: Dict[str, Any]) -> None:
@@ -268,7 +295,10 @@ def _get_active_model_set_sync() -> str:
 # For backwards compatibility with existing code
 def get_active_set_sync() -> Dict[str, Any]:
     """Synchronous getter for active set."""
-    return _get_model_sets_sync()[_get_active_model_set_sync()]
+    active = _get_model_sets_sync()[_get_active_model_set_sync()]
+    active = dict(active)
+    active["chairman"] = _normalize_chairman(active.get("chairman", []))
+    return active
 
 
 def get_council_models_sync() -> List[str]:
@@ -276,6 +306,12 @@ def get_council_models_sync() -> List[str]:
     return get_active_set_sync()["council"]
 
 
+def get_chairman_models_sync() -> List[str]:
+    """Synchronous getter for chairman models (list)."""
+    return _normalize_chairman(get_active_set_sync().get("chairman", []))
+
+
 def get_chairman_model_sync() -> str:
-    """Synchronous getter for chairman model."""
-    return get_active_set_sync()["chairman"]
+    """Synchronous getter for primary chairman model."""
+    models = get_chairman_models_sync()
+    return models[0] if models else ""

@@ -28,7 +28,7 @@ export default function ModelSetManager({ onBack }) {
     icon: '',
     description: '',
     council: [],
-    chairman: '',
+    chairman: [],
   });
 
   useEffect(() => {
@@ -77,7 +77,7 @@ export default function ModelSetManager({ onBack }) {
       icon: '',
       description: '',
       council: [],
-      chairman: '',
+      chairman: [],
     });
     setEditing('new');
     setError(null);
@@ -91,7 +91,7 @@ export default function ModelSetManager({ onBack }) {
       icon: ms.icon,
       description: ms.description,
       council: [...ms.council],
-      chairman: ms.chairman,
+      chairman: [...(ms.chairman || [])],
     });
     setEditing(setId);
     setError(null);
@@ -112,6 +112,11 @@ export default function ModelSetManager({ onBack }) {
           setSaving(false);
           return;
         }
+        if (form.chairman.length === 0) {
+          setError('At least one chairman model is required');
+          setSaving(false);
+          return;
+        }
         await api.createModelSet({
           set_id: form.set_id,
           label: form.label,
@@ -121,6 +126,11 @@ export default function ModelSetManager({ onBack }) {
           chairman: form.chairman,
         });
       } else {
+        if (form.chairman.length === 0) {
+          setError('At least one chairman model is required');
+          setSaving(false);
+          return;
+        }
         await api.updateModelSet(editing, {
           label: form.label,
           icon: form.icon,
@@ -170,6 +180,15 @@ export default function ModelSetManager({ onBack }) {
         ? prev.council.filter((m) => m !== modelId)
         : [...prev.council, modelId];
       return { ...prev, council };
+    });
+  };
+
+  const toggleChairman = (modelId) => {
+    setForm((prev) => {
+      const chairman = prev.chairman.includes(modelId)
+        ? prev.chairman.filter((m) => m !== modelId)
+        : [...prev.chairman, modelId];
+      return { ...prev, chairman };
     });
   };
 
@@ -224,16 +243,20 @@ export default function ModelSetManager({ onBack }) {
                   <div className="msm-card-model-list">
                     {ms.council.map((m) => (
                       <span key={m} className="msm-card-model-tag">
-                        {m.split('/')[1]?.replace(/:free$/, '') ?? m}
+                        {m.substring(m.indexOf('/') + 1).replace(/:free$/, '') || m}
                       </span>
                     ))}
                   </div>
                 </div>
                 <div className="msm-card-section">
-                  <span className="msm-card-section-label">Chairman</span>
-                  <span className="msm-card-chairman">
-                    {ms.chairman.split('/')[1]?.replace(/:free$/, '') ?? ms.chairman}
-                  </span>
+                  <span className="msm-card-section-label">Chairman ({ms.chairman.length})</span>
+                  <div className="msm-card-model-list">
+                    {(ms.chairman || []).map((m) => (
+                      <span key={m} className="msm-card-chairman-tag">
+                        {m.substring(m.indexOf('/') + 1).replace(/:free$/, '') || m}
+                      </span>
+                    ))}
+                  </div>
                 </div>
               </div>
               <div className="msm-card-actions">
@@ -400,19 +423,79 @@ export default function ModelSetManager({ onBack }) {
         </div>
 
         <div className="msm-field">
-          <label>Chairman Model</label>
-          <select
-            value={form.chairman}
-            onChange={(e) => setForm({ ...form, chairman: e.target.value })}
-            className="msm-select"
-          >
-            <option value="">-- Select chairman --</option>
-            {availableModels.map((m) => (
-              <option key={m.id} value={m.id}>
-                {m.name} ({m.provider})
-              </option>
-            ))}
-          </select>
+          <label>Chairman Models ({form.chairman.length} selected)</label>
+          {form.chairman.length > 0 && (
+            <div className="msm-chairman-tags">
+              {form.chairman.map((m) => (
+                <span key={m} className="msm-chairman-tag">
+                  {m.substring(m.indexOf('/') + 1).replace(/:free$/, '') || m}
+                  <button
+                    type="button"
+                    className="msm-chairman-tag-remove"
+                    onClick={() => toggleChairman(m)}
+                    title={`Remove ${m}`}
+                  >
+                    ×
+                  </button>
+                </span>
+              ))}
+            </div>
+          )}
+          <div className="msm-picker-filters">
+            <select
+              value={providerFilter}
+              onChange={(e) => setProviderFilter(e.target.value)}
+              className="msm-provider-filter"
+            >
+              <option value="">All Providers</option>
+              {Object.keys(providers).map((p) => (
+                <option key={p} value={p}>{p}</option>
+              ))}
+            </select>
+            <input
+              type="text"
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              placeholder="Search models..."
+              className="msm-search"
+            />
+          </div>
+          <div className="msm-model-list">
+            {filteredModels.filter((m) => !m.id.startsWith('set/')).length === 0 && (
+              <div className="msm-no-models">No models found</div>
+            )}
+            {filteredModels.filter((m) => !m.id.startsWith('set/')).map((m) => {
+              const isSelected = form.chairman.includes(m.id);
+              return (
+                <div
+                  key={m.id}
+                  className={`msm-model-item ${isSelected ? 'selected' : ''}`}
+                  onClick={() => toggleChairman(m.id)}
+                >
+                  <div className="msm-model-check">
+                    {isSelected ? '✓' : ''}
+                  </div>
+                  <div className="msm-model-info">
+                    <div className="msm-model-name">{m.name}</div>
+                    <div className="msm-model-id">{m.id}</div>
+                  </div>
+                  <div className="msm-model-meta">
+                    <span className={`msm-provider-badge provider-${m.provider}`}>
+                      {m.provider}
+                    </span>
+                    {formatPrice(m.pricing) && (
+                      <span className="msm-model-price">{formatPrice(m.pricing)}</span>
+                    )}
+                    {m.context_length && (
+                      <span className="msm-model-ctx">
+                        {(m.context_length / 1000).toFixed(0)}K ctx
+                      </span>
+                    )}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
         </div>
 
         <div className="msm-form-actions">

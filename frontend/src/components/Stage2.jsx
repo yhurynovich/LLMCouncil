@@ -4,6 +4,12 @@ import remarkGfm from 'remark-gfm';
 import rehypeSanitize from 'rehype-sanitize';
 import './Stage2.css';
 
+const shortModelName = (model) => {
+  if (!model) return 'Unknown';
+  const idx = model.indexOf('/');
+  return idx >= 0 ? model.substring(idx + 1).replace(/:free$/, '') : model;
+};
+
 function deAnonymizeText(text, labelToModel) {
   if (!labelToModel || !text) return text;
 
@@ -11,7 +17,7 @@ function deAnonymizeText(text, labelToModel) {
   let result = text;
   for (const label of sortedLabels) {
     const model = labelToModel[label];
-    const modelShortName = (model?.split('/')[1] || model || 'Unknown').replace(/[*_~`[\]\\]/g, '');
+    const modelShortName = shortModelName(model).replace(/[*_~`[\]\\]/g, '');
     const escapedLabel = label.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
     // Escape $ characters in the replacement string to prevent regex injection
     const safeReplacement = `**${modelShortName.replace(/\$/g, '$$$$')}**`;
@@ -46,7 +52,7 @@ export default function Stage2({ rankings, labelToModel, aggregateRankings }) {
             className={`tab ${activeTab === index ? 'active' : ''}`}
             onClick={() => setActiveTab(index)}
           >
-            {rank.model ? (rank.model.split('/')[1] || rank.model) : 'Unknown'}
+            {shortModelName(rank.model)}
           </button>
         ))}
       </div>
@@ -69,7 +75,7 @@ export default function Stage2({ rankings, labelToModel, aggregateRankings }) {
               {rankings[activeTab]?.parsed_ranking.map((label, i) => (
                 <li key={i}>
                   {labelToModel?.[label]
-                    ? labelToModel[label].split('/')[1] || labelToModel[label]
+                    ? shortModelName(labelToModel[label])
                     : label}
                 </li>
               ))}
@@ -89,7 +95,7 @@ export default function Stage2({ rankings, labelToModel, aggregateRankings }) {
               <div key={index} className="aggregate-item">
                 <span className="rank-position">#{index + 1}</span>
                 <span className="rank-model">
-                  {agg.model ? (agg.model.split('/')[1] || agg.model) : 'Unknown'}
+                  {shortModelName(agg.model)}
                 </span>
                 <span className="rank-score">
                   Avg: {agg.average_rank.toFixed(2)}

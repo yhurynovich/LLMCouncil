@@ -22,7 +22,7 @@ from mcp.server.fastmcp import Context, FastMCP
 from starlette.requests import Request
 from starlette.responses import JSONResponse
 
-from .config import get_active_model_set, get_model_sets
+from .config import get_active_model_set, get_model_sets, _normalize_chairman
 from .council import run_full_council, stage1_collect_responses
 from .http_client import close_shared_client, create_shared_client
 from .llm_client import _get_proxy_url, query_model
@@ -241,7 +241,7 @@ async def model_set_resource(set_id: str) -> str:
             "icon": ms.get("icon", ""),
             "description": ms.get("description", ""),
             "council": ms["council"],
-            "chairman": ms["chairman"],
+            "chairman": cfg._normalize_chairman(ms.get("chairman", [])),
         },
         indent=2,
     )

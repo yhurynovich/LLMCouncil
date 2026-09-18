@@ -6,6 +6,12 @@ import './Stage1.css';
 
 const hasError = (resp) => resp.error && String(resp.error).trim() !== '';
 
+const shortModelName = (model) => {
+  if (!model) return 'Unknown';
+  const idx = model.indexOf('/');
+  return idx >= 0 ? model.substring(idx + 1).replace(/:free$/, '') : model;
+};
+
 export default function Stage1({ responses }) {
   const [activeTab, setActiveTab] = useState(0);
   const [expandedError, setExpandedError] = useState(null);
@@ -44,7 +50,7 @@ export default function Stage1({ responses }) {
               }
             }}
           >
-            {resp.model ? (resp.model.split('/')[1] || resp.model) : 'Unknown'}
+            {shortModelName(resp.model)}
             {hasError(resp) && <span className="error-indicator">!</span>}
             {!hasError(resp) && resp.response_time != null && (
               <span className="tab-time">{formatTime(resp.response_time)}</span>
