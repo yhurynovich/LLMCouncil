@@ -3,6 +3,7 @@ import asyncio
 import json
 import logging
 import os
+import re
 import time
 import uuid
 from typing import Any
@@ -84,6 +85,61 @@ def _parse_model_id(model: str) -> tuple[str, str]:
         parts = model.split("/", 1)
         return parts[0], parts[1]
     return "openrouter", model
+
+
+import re as _re
+
+# Patterns for text-based function call formats that some models emit
+# instead of structured tool_calls.
+_FUNC_CALL_PATTERN = _re.compile(
+    r'<function=(.*?)>(.*?)</function>',
+    _re.DOTALL
+)
+_PARAM_PATTERN = _re.compile(
+    r'<parameter=(.*?)>(.*?)</parameter>',
+    _re.DOTALL
+)
+
+
+def parse_text_tool_calls(content: str) -> list[dict[str, Any]] | None:
+    """Parse text-based function calls from model response content.
+
+    Some models (especially free-tier on OpenRouter) emit function calls as
+    XML-like text instead of structured tool_calls:
+
+        <function=search_web>
+        <parameter=query>
+        some search query
+        </parameter>
+        </function>
+
+    Returns a list of tool-call dicts in the OpenAI format, or None if
+    no text-based function calls are found.
+    """
+    if not content or not isinstance(content, str):
+        return None
+
+    tool_calls = []
+    for func_match in _FUNC_CALL_PATTERN.finditer(content):
+        func_name = func_match.group(1).strip()
+        func_body = func_match.group(2)
+
+        params = {}
+        for param_match in _PARAM_PATTERN.finditer(func_body):
+            param_name = param_match.group(1).strip()
+            param_value = param_match.group(2).strip()
+            params[param_name] = param_value
+
+        tool_calls.append({
+            "id": f"chatcmpl-tool-{uuid.uuid4().hex[:8]}",
+            "type": "function",
+            "function": {
+                "name": func_name,
+                "arguments": json.dumps(params),
+            },
+        })
+
+    return tool_calls if tool_calls else None
 
 
 async def query_model(
@@ -225,6 +281,55 @@ async def query_model(
             if not isinstance(msg, dict):
                 return {"error": "Invalid message in tool-callback response"}
 
+        # Handle text-based function calls (some models emit <function=...> tags
+        # instead of structured tool_calls — common with free-tier OpenRouter models)
+        if enable_search and provider_name == "openrouter" and not msg.get("tool_calls"):
+            content = msg.get("content") or ""
+            text_tool_calls = parse_text_tool_calls(content)
+            if text_tool_calls:
+                logger.info("[%s] Detected %d text-based function call(s)", model, len(text_tool_calls))
+                tool_results = []
+                for tc in text_tool_calls:
+                    func = tc.get("function", {})
+                    tool_name = func.get("name")
+                    raw_args = func.get("arguments")
+                    if not tool_name or not isinstance(raw_args, str):
+                        continue
+                    try:
+                        tool_args = json.loads(raw_args)
+                    except (json.JSONDecodeError, TypeError) as e:
+                        logger.warning("Failed to parse text-tool args for %s: %s", model, e)
+                        continue
+
+                    logger.info("[%s] search_web(%s)", model, tool_args.get('query', ''))
+                    search_result = await handle_tool_call(tool_name, tool_args)
+                    tool_results.append({
+                        "tool_call_id": tc["id"],
+                        "name": tool_name,
+                        "content": search_result,
+                    })
+
+                second_messages = list(messages) + [
+                    {"role": "assistant", "content": None, "tool_calls": text_tool_calls},
+                    *[{"role": "tool", **tr} for tr in tool_results],
+                ]
+                second_payload = {"model": api_model, "messages": second_messages}
+                if provider.get("session_support") and session_id:
+                    session_param = provider.get("session_param", "session_id")
+                    second_payload[session_param] = session_id
+
+                second_headers = dict(headers)
+                second_headers["X-Request-ID"] = str(uuid.uuid4())
+                resp2 = await client.post(base_url, headers=second_headers, json=second_payload, timeout=timeout)
+                resp2.raise_for_status()
+                data2 = resp2.json()
+                choices2 = data2.get("choices")
+                if not choices2:
+                    return {"error": "No choices in text-tool-callback response"}
+                msg = choices2[0].get("message", {})
+                if not isinstance(msg, dict):
+                    return {"error": "Invalid message in text-tool-callback response"}
+
         elapsed = round(time.monotonic() - t0, 2)
         content = msg.get("content") or ""
         if not content.strip():
@@ -237,7 +342,6 @@ async def query_model(
 
     except Exception as e:
         # Sanitize error message to remove API keys
-        import re
         error_msg = str(e)
         error_msg = re.sub(r'(Bearer\s+)\S+', r'\1[REDACTED]', error_msg)
         error_msg = re.sub(r'sk-[a-zA-Z0-9]{20,}', '[REDACTED]', error_msg)
