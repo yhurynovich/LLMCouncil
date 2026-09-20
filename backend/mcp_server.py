@@ -307,7 +307,7 @@ async def model_set_resource(set_id: str) -> str:
             "icon": ms.get("icon", ""),
             "description": ms.get("description", ""),
             "council": ms["council"],
-            "chairman": cfg._normalize_chairman(ms.get("chairman", [])),
+            "chairman": _normalize_chairman(ms.get("chairman", [])),
         },
         indent=2,
     )
