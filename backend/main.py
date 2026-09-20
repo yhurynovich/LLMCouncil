@@ -749,7 +749,12 @@ async def openai_chat_completions(request: OpenAIChatCompletionRequest, x_sessio
         # This is used for model session continuity (e.g., local models that maintain state).
         # It does NOT grant access to conversation data or storage operations.
         # The session ID is only passed to get_or_create_model_session_async for model session tracking.
+        # We verify the conversation exists in storage so the session call doesn't fail.
         conversation_id = x_session_id if x_session_id and _is_valid_uuid(x_session_id) else None
+        if conversation_id:
+            conv = await storage.get_conversation_async(conversation_id)
+            if conv is None:
+                conversation_id = None
         stage1_results, session_ids = await stage1_collect_responses(
             msgs, council_models,
             temperature=request.temperature,

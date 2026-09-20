@@ -1,6 +1,6 @@
 ---
 name: council-code-review
-description: "Code review using LLM Council multi-model deliberation. Sends code to a panel of models that independently evaluate and rank each other's feedback, then a chairman synthesizes a final verdict. Use when user asks for 'council review', 'code review', 'multi-model review', 'review my code', 'council feedback', or wants code evaluated by multiple LLMs. Supports file attachments (any code file type). Supports session ID tracking for OpenRouter proxy observability."
+description: "Code review using LLM Council multi-model deliberation. Sends code to a panel of models that independently evaluate and rank each other's feedback, then a chairman synthesizes a final verdict. Use when user asks for 'council review', 'code review', 'multi-model review', 'review my code', 'council feedback', or wants code evaluated by multiple LLMs. Supports file attachments (any code file type) with hybrid embed/MCP large file handling for files up to 100MB. Supports session ID tracking for OpenRouter proxy observability."
 ---
 
 # Council Code Review
@@ -43,34 +43,48 @@ Collect the code to review. The user may provide:
 - File path(s) to attach
 - Both (files + additional context)
 
-Read all attached files fully before sending. Include full file contents in the review request.
-
 ### Step 2: Build the review payload
 
 Use the bundled script to send code to the Council backend:
 
 ```bash
 python3 SKILL_DIR/scripts/council_review.py \
-  --url http://192.168.31.66:5174/v1 \
+  --url http://192.168.31.66:5174 \
   --model code \
   --code "PASTE_OR_VARIABLE" \
   --files /path/to/file1.py /path/to/file2.ts
 ```
 
-- `--url`: Backend API endpoint (default: `http://192.168.31.66:5174/v1`)
+- `--url`: Backend API URL (default: `http://192.168.31.66:5174`). Note: URL base, not `/v1` prefix.
 - `--model`: Model set name (default: `code`). Accepts: `code`, `search`, `think`. Also accepts `set/code` format.
 - `--code`: Code string to review (use when code is inline)
-- `--files`: Space-separated file paths to attach (reads content and includes in payload)
+- `--files`: Space-separated file paths to attach. Files are **uploaded** to the backend's `/api/upload` endpoint, returning a `file_id`, then attached as `FileAttachment` objects. The backend decides whether to embed or use MCP tools based on file size.
 - `--context`: Optional context/instructions for the review (e.g. "focus on security", "review for performance")
-- `--session-id`: Optional session ID for conversation tracking (auto-generated UUID if not provided). This is sent as `X-Session-ID` and `X-Conversation-ID` headers to the OpenRouter proxy for log correlation and observability.
+- `--session-id`: Optional session ID for conversation tracking (auto-generated UUID if not provided). Sent as `X-Session-ID` and `X-Conversation-ID` headers to the OpenRouter proxy for log correlation and observability.
+- `--quick`: Skip Stage 2 & 3 (ranking and synthesis), return Stage 1 only (faster)
+- `--format`: Output format for non-raw mode: `text` (default) or `json`
+- `--stream`: Force streaming SSE endpoint even for inline code (gives full 3-stage output)
+
+### Large File Handling via MCP
+
+When files are attached, the backend uses a **hybrid embed/MCP** strategy:
+
+- **Text files ≤ 100KB** — embedded directly in the prompt (fast, no extra round-trips)
+- **Text files ≤ 1MB** — embedded with a truncation note (partial content in prompt)
+- **Text files > 1MB** — made available via MCP file tools (`read_file`, `search_files`, `list_files`, `get_file_info`). The LLM calls these tools on-demand to access content, bypassing the 5MB OpenRouter proxy body limit.
+- **Images ≤ 2MB** (after downscaling) — embedded as base64 directly in the prompt
+- **Images > 2MB** — made available via MCP file tools
+
+This allows reviewing files of **any size** (up to the `MAX_TEXT_SIZE_MB` / `MAX_IMAGE_SIZE_MB` env var limits, default 100MB each) without hitting payload size limits.
 
 ### Step 3: Present results
 
-The script outputs JSON with:
+The script outputs all stages:
 - `stage1`: Individual model responses (one per council model)
 - `stage2`: Anonymous peer evaluations and rankings
 - `stage3`: Chairman's final synthesized verdict
 - `metadata`: Model mapping and aggregate rankings
+- `title`: Auto-generated conversation title
 
 Present results to the user in a readable format:
 1. **Final Verdict** (Stage 3) — the synthesized recommendation
@@ -100,7 +114,9 @@ User says: "review this function for bugs" → Read code → Send to council →
 
 User says: "attach utils.py and review it" → Read file → Send with `--files utils.py` → Present verdict.
 
-User says: "council review my PR changes" → Read changed files → Send all → Present verdict with per-file breakdown.
+User says: "review this 5000-line TypeScript file" → Upload file → Backend uses MCP tools for on-demand file reading → Present verdict from council.
+
+User says: "council review my PR changes" → Upload all changed files → Backend embeds small ones, uses MCP for large ones → Present verdict with per-file breakdown.
 
 ## Important: Avoid Infinite Loops
 
@@ -115,6 +131,7 @@ This prevents runaway loops where the agent endlessly reviews its own changes.
 
 ## Troubleshooting
 
-- **Connection error**: Backend at `http://192.168.31.66:5174/v1` may be down. Start with: `cd /path/to/LLMCouncil && python -m backend.main`
-- **Timeout**: Large codebases may take longer. The script has a 600s timeout; for very large payloads consider splitting.
+- **Connection error**: Backend at `http://192.168.31.66:5174` may be down. Start with: `cd /path/to/LLMCouncil && python -m backend.main`
+- **Timeout**: Council runs all models in parallel (Stage 1), then sequential peer review (Stage 2) and synthesis (Stage 3). Total time is typically 30-120s. Use `--quick` to skip Stage 2 & 3 for faster results.
+- **File upload failed**: Check that `MAX_TEXT_SIZE_MB` and `MAX_IMAGE_SIZE_MB` env vars allow the file size (default 100MB each). Large files are handled via MCP tools — no need to split.
 - **Model set not found**: Check available sets with `curl http://192.168.31.66:5174/api/model-sets`. Create new sets via `POST /api/model-sets`.

@@ -382,7 +382,7 @@ def format_sse_output(results):
     if stage3:
         lines.append("## Final Verdict (Stage 3)")
         lines.append("")
-        lines.append(stage3.get("response", "No verdict from chairman."))
+        lines.append(stage3.get("response") or "No verdict from chairman.")
         lines.append("")
 
     # Stage 1 — Individual Reviews
@@ -392,7 +392,7 @@ def format_sse_output(results):
         lines.append("")
         for r in stage1:
             model_name = r.get("model", "unknown")
-            response_text = r.get("response", "")
+            response_text = r.get("response") or ""
             lines.append(f"### {model_name}")
             lines.append("")
             lines.append(response_text)
@@ -416,7 +416,7 @@ def format_sse_output(results):
             )
             lines.append(f"### {model} evaluated anonymously:")
             lines.append("")
-            lines.append(r.get("evaluation", ""))
+            lines.append(r.get("evaluation") or "")
             lines.append("")
 
     return "\n".join(lines)
