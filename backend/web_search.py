@@ -2,6 +2,9 @@
 web_search.py — Free web search via self-hosted SearXNG.
 SearXNG runs as a sibling Docker container on the llm-council network.
 Internal container-to-container communication always uses port 8080.
+
+Also handles MCP file tool calls (read_file, search_files, list_files, get_file_info)
+which operate on the backend's local upload storage.
 """
 
 import os
@@ -95,7 +98,17 @@ async def searxng_search(query: str, max_results: int = 5) -> str:
 
 
 async def handle_tool_call(tool_name: str, arguments: dict) -> str:
-    """Handle tool calls from LLMs (async version)."""
+    """Handle tool calls from LLMs (async version).
+
+    Supports: search_web, read_file, search_files, list_files, get_file_info
+    """
+    # File tools (MCP-based file access)
+    if tool_name in ("read_file", "search_files", "list_files", "get_file_info"):
+        from .uploads import resolve_file_tool_call
+        return resolve_file_tool_call(tool_name, arguments)
+
+    # Web search tool
     if tool_name == "search_web":
         return await searxng_search(arguments.get("query", ""))
+
     return f"Unknown tool: {tool_name}"

@@ -210,6 +210,7 @@ class FileAttachment(BaseModel):
     filename: str
     type: str  # "text" or "image"
     ext: str
+    size: Optional[int] = None  # file size in bytes (optional, looked up from disk if absent)
 
 class SendMessageRequest(BaseModel):
     content: str

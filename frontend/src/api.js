@@ -218,9 +218,10 @@ export const api = {
 
   //  File Uploads
 
-  async uploadFile(file) {
+  async uploadFile(file, onProgress = null) {
     const formData = new FormData();
     formData.append('file', file);
+
     const response = await fetchWithAuth(`${API_BASE}/api/upload`, {
       method: 'POST',
       body: formData,
@@ -229,6 +230,11 @@ export const api = {
       const err = await response.json().catch(() => ({}));
       throw new Error(err.detail || 'Failed to upload file');
     }
+
+    if (onProgress) {
+      onProgress({ loaded: 100, total: 100, lengthComputable: true });
+    }
+
     return response.json();
   },
 

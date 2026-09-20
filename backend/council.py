@@ -1,5 +1,6 @@
 """3-stage LLM Council orchestration."""
 
+import os
 import re
 import uuid
 import time
@@ -8,7 +9,10 @@ from collections import defaultdict
 from typing import List, Dict, Any, Tuple, Optional, Union
 from .llm_client import query_models_parallel, query_model
 from .config import get_council_models, get_chairman_model, get_chairman_models, get_council_models_sync, get_chairman_model_sync, get_chairman_models_sync, _normalize_chairman
-from .uploads import read_file_content, get_image_base64
+from .uploads import (
+    read_file_content, get_image_base64, downscale_image, should_embed_directly,
+    get_file_tools,
+)
 from .storage import get_or_create_model_session_async
 from .metrics import (
     log_stage_metric,
@@ -62,44 +66,120 @@ def build_response_block(label: str, content: str) -> str:
     return f"{RESPONSE_START_DELIMITER}{label}>>>\n{sanitized}\n{RESPONSE_START_DELIMITER}{label}END>>>"
 
 
-def build_message_with_files(user_query: str, files: list) -> Union[str, List[Dict[str, Any]]]:
-    """Prepends file content to user query. Returns multimodal content for vision-capable models."""
+def _file_attr(f, attr: str):
+    """Get attribute from either an object or a dict."""
+    return f[attr] if isinstance(f, dict) else getattr(f, attr)
+
+def build_message_with_files(user_query: str, files: list) -> Tuple[Union[str, List[Dict[str, Any]]], Optional[list]]:
+    """Build message content with files using hybrid embed/MCP strategy.
+
+    Small files are embedded directly in the prompt; large files are made
+    available via MCP file tools (read_file, search_files, etc.).
+
+    Returns:
+        (content, file_tools) where file_tools is a list of tool definitions
+        (or None) to include in the LLM request when MCP access is needed.
+    """
     if not files:
-        return user_query
+        return user_query, None
 
     content_parts = []
+    file_tools = None
+    mcp_files_info = []
 
-    # Add text files first
+    TEXT_TRUNCATE_LIMIT = int(os.getenv("TEXT_EMBED_MAX_MB", "1")) * 1024 * 1024
+
     for f in files:
-        if f.type == "text":
-            content = read_file_content(f.file_id, f.ext)
-            content_parts.append({
-                "type": "text",
-                "text": f"File: {f.filename}\n```\n{content}\n```"
-            })
+        file_id = _file_attr(f, "file_id")
+        filename = _file_attr(f, "filename")
+        file_type = _file_attr(f, "type")
+        ext = _file_attr(f, "ext")
+        file_size = _file_attr(f, "size") or _lookup_file_size(file_id, ext)
 
-    # Add the user query as text
+        file_meta = {
+            "file_id": file_id,
+            "filename": filename,
+            "type": file_type,
+            "ext": ext,
+            "size": file_size,
+        }
+
+        embed, reason = should_embed_directly(file_meta)
+
+        if embed:
+            if file_type == "image":
+                b64 = downscale_image(file_id, ext) or get_image_base64(file_id, ext)
+                if b64:
+                    mime = f"image/{ext.lstrip('.')}"
+                    content_parts.append({
+                        "type": "image_url",
+                        "image_url": {"url": f"data:{mime};base64,{b64}"}
+                    })
+            elif file_type == "text":
+                content = read_file_content(file_id, ext)
+                if len(content) > TEXT_TRUNCATE_LIMIT:
+                    content = content[:TEXT_TRUNCATE_LIMIT] + f"\n\n[File truncated at {TEXT_TRUNCATE_LIMIT // (1024*1024)}MB — use read_file tool for full content. file_id: {file_id}]"
+                content_parts.append({
+                    "type": "text",
+                    "text": f"File: {filename}\n```\n{content}\n```"
+                })
+            else:
+                content = read_file_content(file_id, ext)
+                content_parts.append({
+                    "type": "text",
+                    "text": f"File: {filename}\n```\n{content}\n```"
+                })
+            print(f"[files] Embedded directly: {filename} — {reason}", flush=True)
+        else:
+            mcp_files_info.append({
+                "file_id": file_id,
+                "filename": filename,
+                "type": file_type,
+                "ext": ext,
+                "size": file_size,
+                "reason": reason,
+            })
+            print(f"[files] MCP access: {filename} — {reason}", flush=True)
+
+    if mcp_files_info:
+        mcp_text = "The following files are available for on-demand access via file tools:\n"
+        for fi in mcp_files_info:
+            size_str = _format_size(fi["size"])
+            mcp_text += f"- {fi['filename']} (type: {fi['type']}, size: {size_str}, file_id: {fi['file_id']}, ext: {fi['ext']})\n"
+        mcp_text += "Use the read_file tool with the file_id and ext to read file content, search_files to search across files, or get_file_info for metadata."
+        content_parts.append({
+            "type": "text",
+            "text": mcp_text
+        })
+        file_tools = get_file_tools()
+
     content_parts.append({
         "type": "text",
         "text": user_query
     })
 
-    # Add images
-    for f in files:
-        if f.type == "image":
-            b64 = get_image_base64(f.file_id, f.ext)
-            if b64:
-                mime = f"image/{f.ext.lstrip('.')}"
-                content_parts.append({
-                    "type": "image_url",
-                    "image_url": {"url": f"data:{mime};base64,{b64}"}
-                })
-
-    # If only text content, return as string for backwards compatibility
     if all(p["type"] == "text" for p in content_parts):
-        return "\n\n".join(p["text"] for p in content_parts)
+        return "\n\n".join(p["text"] for p in content_parts), file_tools
 
-    return content_parts
+    return content_parts, file_tools
+
+
+def _lookup_file_size(file_id: str, ext: str) -> int:
+    """Look up file size from disk if not provided in file meta."""
+    try:
+        filepath = os.path.join("data/uploads", f"{file_id}{ext}")
+        return os.path.getsize(filepath)
+    except (OSError, ValueError):
+        return 0
+
+
+def _format_size(size_bytes: int) -> str:
+    """Format byte size as human-readable string."""
+    for unit in ["B", "KB", "MB", "GB"]:
+        if size_bytes < 1024:
+            return f"{size_bytes:.1f}{unit}"
+        size_bytes /= 1024
+    return f"{size_bytes:.1f}TB"
 
 
 async def stage1_collect_responses(
@@ -111,8 +191,9 @@ async def stage1_collect_responses(
     conversation_id: Optional[str] = None,
 ) -> Tuple[List[Dict[str, Any]], Dict[str, str]]:
     # Handle files if present (multimodal content)
+    file_tools = None
     if files:
-        content = build_message_with_files(messages[-1].get("content", ""), files)
+        content, file_tools = build_message_with_files(messages[-1].get("content", ""), files)
         new_messages = messages[:-1] + [{"role": "user", "content": content}]
     else:
         new_messages = messages
@@ -125,7 +206,7 @@ async def stage1_collect_responses(
         for model in models:
             session_ids[model] = await get_or_create_model_session_async(conversation_id, model)
     
-    responses = await query_models_parallel(models, new_messages, temperature=temperature, max_tokens=max_tokens, session_ids=session_ids)
+    responses = await query_models_parallel(models, new_messages, temperature=temperature, max_tokens=max_tokens, session_ids=session_ids, file_tools=file_tools)
 
     stage1_results = []
     for model, response in responses.items():

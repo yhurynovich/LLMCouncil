@@ -30,7 +30,10 @@ else:
         "nvidia/nemotron-3-super-120b-a12b:free",
         "nvidia/nemotron-3-ultra-550b-a55b:free",
         "qwen/qwen3.8-27b:free",
-        "z-ai/glm-5.2:free",
+        "poolside/laguna-xs-2.1:free",
+        "poolside/laguna-s-2.1:free",
+        "thinkingmachines/inkling-small:free",
+        "thinkingmachines/inkling:free",
     }
 
 
@@ -146,6 +149,7 @@ async def query_model(
     model: str,
     messages: list,
     enable_search: bool = True,
+    file_tools: list = None,
     session_id: str = None,
     **kwargs,
 ) -> dict[str, Any] | None:
@@ -188,14 +192,20 @@ async def query_model(
         session_param = provider.get("session_param", "session_id")
         payload[session_param] = session_id
 
-    if enable_search and provider_name == "openrouter":
-        # Disable tools for models that don't support function calling
-        model_supports_tools = model_id not in MODELS_NO_TOOLS
-        if model_supports_tools:
-            payload["tools"] = [SEARCH_TOOL]
-            payload["tool_choice"] = "auto"
-        else:
-            logger.info("[%s] Web search disabled - model doesn't support function calling", model)
+    # Determine which tools to include
+    model_supports_tools = model_id not in MODELS_NO_TOOLS
+    has_tools = enable_search or (file_tools and len(file_tools) > 0)
+    
+    if has_tools and provider_name == "openrouter" and model_supports_tools:
+        tools = []
+        if enable_search:
+            tools.append(SEARCH_TOOL)
+        if file_tools:
+            tools.extend(file_tools)
+        payload["tools"] = tools
+        payload["tool_choice"] = "auto"
+    elif has_tools and provider_name == "openrouter" and not model_supports_tools:
+        logger.info("[%s] Tools disabled - model doesn't support function calling", model)
 
     # Pass temperature and max_tokens if provided (and not None)
     if kwargs.get("temperature") is not None:
@@ -235,8 +245,8 @@ async def query_model(
         if not isinstance(msg, dict):
             return {"error": "Invalid message field in response"}
 
-        # Handle tool calls (OpenRouter only)
-        if enable_search and provider_name == "openrouter" and msg.get("tool_calls"):
+        # Handle tool calls (OpenRouter models with tools enabled)
+        if has_tools and provider_name == "openrouter" and msg.get("tool_calls"):
             tool_results = []
             for tc in msg["tool_calls"]:
                 func = tc.get("function", {})
@@ -250,12 +260,12 @@ async def query_model(
                     logger.warning("Failed to parse tool args for %s: %s", model, e)
                     return {"error": f"Invalid tool call arguments: {e}"}
 
-                logger.info("[%s] search_web(%s)", model, tool_args.get('query', ''))
-                search_result = await handle_tool_call(tool_name, tool_args)
+                logger.info("[%s] %s(%s)", model, tool_name, str(tool_args)[:200])
+                tool_result = await handle_tool_call(tool_name, tool_args)
                 tool_results.append({
                     "tool_call_id": tc["id"],
                     "name": tool_name,
-                    "content": search_result,
+                    "content": tool_result,
                 })
 
             second_messages = list(messages) + [
@@ -283,7 +293,7 @@ async def query_model(
 
         # Handle text-based function calls (some models emit <function=...> tags
         # instead of structured tool_calls — common with free-tier OpenRouter models)
-        if enable_search and provider_name == "openrouter" and not msg.get("tool_calls"):
+        if has_tools and provider_name == "openrouter" and not msg.get("tool_calls"):
             content = msg.get("content") or ""
             text_tool_calls = parse_text_tool_calls(content)
             if text_tool_calls:
@@ -301,12 +311,12 @@ async def query_model(
                         logger.warning("Failed to parse text-tool args for %s: %s", model, e)
                         continue
 
-                    logger.info("[%s] search_web(%s)", model, tool_args.get('query', ''))
-                    search_result = await handle_tool_call(tool_name, tool_args)
+                    logger.info("[%s] %s(%s)", model, tool_name, str(tool_args)[:200])
+                    tool_result = await handle_tool_call(tool_name, tool_args)
                     tool_results.append({
                         "tool_call_id": tc["id"],
                         "name": tool_name,
-                        "content": search_result,
+                        "content": tool_result,
                     })
 
                 second_messages = list(messages) + [

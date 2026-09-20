@@ -27,6 +27,9 @@ COPY <<'EOF' /etc/nginx/conf.d/llm-council.conf
 server {
     listen 80;
 
+    # Allow large file uploads (for MCP file access architecture)
+    client_max_body_size 100m;
+
     # Serve the built React app
     root /usr/share/nginx/html;
     index index.html;

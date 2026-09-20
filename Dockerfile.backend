@@ -21,9 +21,9 @@ RUN chown -R ${UID}:${GID} /app
 # Copy dependency files with correct ownership
 COPY --chown=${UID}:${GID} pyproject.toml uv.lock ./
 
-# Install project deps + beautifulsoup4 into the uv venv as appuser
+# Install project deps into the uv venv as appuser
 USER appuser
-RUN uv sync --no-dev --frozen && uv pip install beautifulsoup4
+RUN uv sync --no-dev && uv pip install beautifulsoup4
 
 # Copy the rest of the source with correct ownership
 COPY --chown=${UID}:${GID} backend/ ./backend/

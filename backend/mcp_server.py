@@ -28,6 +28,10 @@ from .http_client import close_shared_client, create_shared_client
 from .llm_client import _get_proxy_url, query_model
 from .providers import get_providers
 from .storage import create_conversation_async, get_conversation_async
+from .uploads import (
+    read_file_chunk, list_uploaded_files, search_files as search_uploaded_files,
+    get_file_metadata,
+)
 from .web_search import close_searxng_client
 
 # ============================================================================
@@ -216,6 +220,68 @@ async def query_model_tool(
     if result is None:
         raise ValueError(f"Model '{model}' returned no response (unknown model or provider error)")
     return result.get("content", "")
+
+
+# ── File Access Tools (MCP-based file access for uploaded files) ──────────
+
+@mcp_app.tool()
+async def read_file(
+    file_id: str,
+    ext: str,
+    offset: int = 0,
+    limit: int = 65536,
+) -> str:
+    """Read content from an uploaded file with pagination.
+
+    Args:
+        file_id: UUID of the uploaded file.
+        ext: File extension including the dot (e.g. '.py').
+        offset: Byte offset to start reading from (default 0).
+        limit: Maximum bytes to return (default 65536).
+    """
+    content = read_file_chunk(file_id, ext, offset=offset, limit=limit)
+    return json.dumps({
+        "file_id": file_id,
+        "ext": ext,
+        "offset": offset,
+        "bytes_returned": len(content),
+        "content": content if content else "[empty or end of file]",
+    }, indent=2)
+
+
+@mcp_app.tool()
+async def list_files(pattern: Optional[str] = None) -> str:
+    """List uploaded files available for MCP access.
+
+    Args:
+        pattern: Optional pattern to filter filenames (case-insensitive substring match).
+    """
+    files = list_uploaded_files(pattern=pattern)
+    return json.dumps(files, indent=2)
+
+
+@mcp_app.tool()
+async def search_files(query: str, max_results: int = 10) -> str:
+    """Search for a query string across all uploaded text files.
+
+    Args:
+        query: Search query to find in file contents.
+        max_results: Maximum results to return (default 10).
+    """
+    results = search_uploaded_files(query, max_results=max_results)
+    return json.dumps(results, indent=2)
+
+
+@mcp_app.tool()
+async def get_file_info(file_id: str, ext: str) -> str:
+    """Get metadata for a specific uploaded file.
+
+    Args:
+        file_id: UUID of the uploaded file.
+        ext: File extension including the dot (e.g. '.py').
+    """
+    meta = get_file_metadata(file_id, ext)
+    return json.dumps(meta, indent=2)
 
 
 # ============================================================================

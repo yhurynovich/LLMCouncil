@@ -36,6 +36,22 @@ export default function ChatInterface({
     }
   }, [conversation?.messages?.length]);
 
+  // Threshold: files > 1MB will likely use MCP instead of direct embed
+  const MCP_SIZE_THRESHOLD = 1024 * 1024;
+
+  const willUseMcp = (file) => {
+    if (!file) return false;
+    const size = file.size || (file.size_bytes || 0);
+    return size > MCP_SIZE_THRESHOLD;
+  };
+
+  const formatFileSize = (bytes) => {
+    if (!bytes) return '';
+    if (bytes < 1024) return `${bytes} B`;
+    if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+    return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+  };
+
   const handleSubmit = (e) => {
     e.preventDefault();
     if ((input.trim() || attachedFiles.length > 0) && !isLoading) {
@@ -199,20 +215,38 @@ export default function ChatInterface({
       >
         {attachedFiles.length > 0 && (
           <div className="attached-files">
-            {attachedFiles.map(f => (
-              <div key={f.file_id} className="file-chip">
-                {f.type === 'image' ? '🖼' : '📄'}
-                <span className="file-chip-name">{f.filename}</span>
-                <button
-                  type="button"
-                  className="file-chip-remove"
-                  onClick={() => removeFile(f.file_id)}
-                  aria-label={`Remove ${f.filename}`}
-                >
-                  ×
-                </button>
+            {attachedFiles.map((f, idx) => {
+              const willMcp = willUseMcp(f);
+              return (
+                <div key={f.file_id || `${f.name}-${idx}`} className="file-chip">
+                  {f.type === 'image' ? '🖼' : '📄'}
+                  <span className="file-chip-name">{f.name || f.filename}</span>
+                  {willMcp && (
+                    <span className="mcp-badge" title="Large file - will be accessible via MCP tools">
+                      ⚡ MCP
+                    </span>
+                  )}
+                  {!willMcp && (
+                    <span className="size-badge" title="File size">
+                      {formatFileSize(f.size || f.size_bytes)}
+                    </span>
+                  )}
+                  <button
+                    type="button"
+                    className="file-chip-remove"
+                    onClick={() => removeFile(f.file_id)}
+                    aria-label={`Remove ${f.name || f.filename}`}
+                  >
+                    ×
+                  </button>
+                </div>
+              );
+            })}
+            {attachedFiles.some(f => willUseMcp(f)) && (
+              <div className="mcp-warning">
+                Large files will be accessible to the model via on-demand file tools (MCP)
               </div>
-            ))}
+            )}
           </div>
         )}
         <div className="input-row">
