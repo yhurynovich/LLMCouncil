@@ -185,9 +185,16 @@ def register_file_for_mcp(file_meta: dict) -> None:
 
 
 def _resolve_file(file_id: str, ext: str) -> str:
-    """Validate and return the filepath for an MCP-registered file."""
-    if file_id not in _mcp_file_registry:
-        raise ValueError(f"File not registered in MCP registry: {file_id}")
+    """Validate and return the filepath for any uploaded file.
+
+    Checks the in-memory registry first (when the same process handled the
+    upload), then falls back to checking the file on disk — so the MCP
+    server (a separate process) can still serve files uploaded by the
+    backend process.
+    """
+    if file_id not in _mcp_file_registry and MCP_FILE_ACCESS_ENABLED:
+        if not os.path.exists(_safe_join(UPLOAD_DIR, file_id, ext)):
+            raise ValueError(f"File not found: {file_id}{ext}")
     return _safe_join(UPLOAD_DIR, file_id, ext)
 
 
@@ -335,10 +342,20 @@ def read_file_chunk(file_id: str, ext: str, offset: int = 0, limit: int = 64 * 1
 
 
 def list_uploaded_files(pattern: str = None) -> list:
-    """List all uploaded files, optionally filtered by pattern."""
+    """List all uploaded files from disk, optionally filtered by pattern.
+
+    Scans the upload directory so files uploaded by another process
+    (e.g. the backend) are visible to the MCP server.
+    """
     files = []
-    for fid, meta in _mcp_file_registry.items():
-        if pattern is None or pattern.lower() in meta.get("filename", "").lower():
+    if not os.path.exists(UPLOAD_DIR):
+        return files
+    for entry in os.listdir(UPLOAD_DIR):
+        if not UUID_V4_REGEX.match(entry.split(".")[0]):
+            continue
+        ext = os.path.splitext(entry)[1].lower()
+        if pattern is None or pattern.lower() in entry.lower():
+            meta = get_file_metadata(entry.split(".")[0], ext)
             files.append(meta)
     return files
 
@@ -347,20 +364,28 @@ def search_files(query: str, max_results: int = 10) -> list:
     """Search for a query string within text files in the upload directory.
 
     Returns list of {file_id, filename, line_number, line_content} dicts.
+    Scans the upload directory so files from any process are searchable.
     """
     results = []
-    for fid, meta in _mcp_file_registry.items():
-        if meta.get("type") != "text":
+    if not os.path.exists(UPLOAD_DIR):
+        return results
+    for entry in os.listdir(UPLOAD_DIR):
+        parts = entry.split(".", 1)
+        if len(parts) < 2 or not UUID_V4_REGEX.match(parts[0]):
             continue
-        filepath = _safe_join(UPLOAD_DIR, fid, meta["ext"])
+        file_id = parts[0]
+        ext = "." + parts[1]
+        if _get_file_type(entry) != "text":
+            continue
+        filepath = _safe_join(UPLOAD_DIR, file_id, ext)
         try:
             fd = _safe_open_read(filepath, UPLOAD_DIR)
             with os.fdopen(fd, "r", errors="replace") as f:
                 for i, line in enumerate(f, 1):
                     if query.lower() in line.lower():
                         results.append({
-                            "file_id": fid,
-                            "filename": meta["filename"],
+                            "file_id": file_id,
+                            "filename": entry,
                             "line_number": i,
                             "line_content": line.rstrip()[:200],
                         })
