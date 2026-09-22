@@ -1,15 +1,20 @@
 #!/bin/bash
-# Runs two processes in this container:
+# Runs three processes in this container:
 #   1. The main FastAPI app (backend.main)       -> port 8001
 #   2. The MCP server, Streamable HTTP transport -> port 8002
+#   3. cron daemon for scheduled cleanup tasks
 #
 # The main app is treated as the process that matters for container health:
 # if it dies, this script exits non-zero so `restart: unless-stopped`
-# restarts the whole container. The MCP server is additive — if it crashes,
-# that's logged loudly but the main app keeps serving rather than the whole
-# container going down with it.
+# restarts the whole container. The MCP server and cron are additive — if
+# they crash, that's logged loudly but the main app keeps serving.
 
 set -u
+
+# Start cron daemon for scheduled cleanup
+echo "[entrypoint] starting cron daemon..."
+cron &
+CRON_PID=$!
 
 echo "[entrypoint] starting MCP server (Streamable HTTP) on :8002..."
 MCP_TRANSPORT=http uv run python -m backend.mcp_server &
@@ -21,9 +26,10 @@ MAIN_PID=$!
 
 shutdown() {
     echo "[entrypoint] shutting down..."
-    kill -TERM "$MAIN_PID" "$MCP_PID" 2>/dev/null
+    kill -TERM "$MAIN_PID" "$MCP_PID" "$CRON_PID" 2>/dev/null
     wait "$MAIN_PID" 2>/dev/null
     wait "$MCP_PID" 2>/dev/null
+    wait "$CRON_PID" 2>/dev/null
     exit 0
 }
 trap shutdown TERM INT
@@ -33,8 +39,9 @@ wait -n
 
 if ! kill -0 "$MAIN_PID" 2>/dev/null; then
     echo "[entrypoint] main API exited, shutting down container"
-    kill -TERM "$MCP_PID" 2>/dev/null
+    kill -TERM "$MCP_PID" "$CRON_PID" 2>/dev/null
     wait "$MCP_PID" 2>/dev/null
+    wait "$CRON_PID" 2>/dev/null
     exit 1
 fi
 

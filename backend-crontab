@@ -1,0 +1,5 @@
+# LLMCouncil daily cleanup - runs at 2:00 AM daily
+SHELL=/bin/bash
+PATH=/app/.venv/bin:/usr/local/bin:/usr/bin:/bin
+
+0 2 * * * root cd /app && /app/.venv/bin/python scripts/cleanup.py >> data/logs/cleanup.log 2>&1
