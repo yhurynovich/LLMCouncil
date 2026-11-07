@@ -199,3 +199,11 @@ Open http://localhost:5173 in your browser.
 - **Storage:** JSON files in `data/conversations/`
 - **APIs:** OpenRouter, OpenAI-compatible endpoints
 - **Package Management:** uv (Python), npm (JavaScript)
+
+## Support the Project
+
+If you find LLM Council useful, consider supporting its development with a donation via PayPal:
+
+[![Donate with PayPal](https://img.shields.io/badge/Donate-PayPal-blue.svg?logo=paypal)](https://www.paypal.com/ncp/payment/U42MC9YY623QA)
+
+https://www.paypal.com/ncp/payment/U42MC9YY623QA
